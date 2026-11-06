@@ -438,15 +438,15 @@ const PERCENT_FIELDS = new Set(['intent.pass_probability']);
 function fieldToInput(path, value) {
   if (!PERCENT_FIELDS.has(path)) return value ?? '';
   const ratio = Number(value);
-  return String(Number.isFinite(ratio) ? Math.round(ratio * 100) : 50);
+  return String(Number.isFinite(ratio) ? Math.round(ratio * 100) : 100);
 }
 
-/** 输入框显示值 → 模型值：清空或非法时回落到默认 50%。 */
+/** 输入框显示值 → 模型值：清空或非法时回落到默认 100%。 */
 function inputToField(path, raw) {
   if (!PERCENT_FIELDS.has(path)) return raw;
-  if (raw === '') return 0.5;
+  if (raw === '') return 1;
   const percent = Number(raw);
-  if (!Number.isFinite(percent)) return 0.5;
+  if (!Number.isFinite(percent)) return 1;
   return Math.min(100, Math.max(0, percent)) / 100;
 }
 

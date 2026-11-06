@@ -52,8 +52,8 @@ from ..speech.segments import (
 
 DEFAULT_CONTEXT_TURNS = 20
 DEFAULT_THRESHOLD = 0.7
-DEFAULT_PASS_PROBABILITY = 0.5
-"""「按概率放行」的默认概率：一半机会发言；填 1.0 即必定发言（旧版「直接放行」）。"""
+DEFAULT_PASS_PROBABILITY = 1.0
+"""「按概率放行」的默认概率：默认必定发言（同旧版「直接放行」），调低才按概率放弃。"""
 DEFAULT_COOLDOWN_MINUTES = 5
 DEFAULT_UNREAD_MIN_COUNT = 10
 DEFAULT_UNANSWERED_COUNT = 3

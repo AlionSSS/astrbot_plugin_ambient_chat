@@ -30,8 +30,8 @@ def _judge() -> IntentJudge:
     return IntentJudge(None, None)  # type: ignore[arg-type]
 
 
-def test_default_probability_is_half() -> None:
-    """没写该字段的规则（含历史规则）按默认 50% 处理。"""
+def test_default_probability_is_certain() -> None:
+    """没写该字段的规则（含历史规则）按默认 100% 处理，行为同旧版直接放行。"""
     rule = Rule.parse(
         {
             "name": "测试规则",
@@ -40,8 +40,8 @@ def test_default_probability_is_half() -> None:
         },
         TZ,
     )
-    assert rule.intent.pass_probability == 0.5
-    assert rule.intent.to_dict()["pass_probability"] == 0.5
+    assert rule.intent.pass_probability == 1.0
+    assert rule.intent.to_dict()["pass_probability"] == 1.0
 
 
 @pytest.mark.asyncio
