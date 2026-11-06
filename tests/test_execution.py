@@ -24,7 +24,11 @@ from astrbot_plugin_ambient_chat.runtime.execution import SpeechExecution
 from astrbot_plugin_ambient_chat.runtime.scheduler import AmbientScheduler
 from astrbot_plugin_ambient_chat.speech.blockers import BlockDecision, BlockerChain
 from astrbot_plugin_ambient_chat.speech.decision import DecisionRouter
-from astrbot_plugin_ambient_chat.speech.delivery import Delivery, PreparedSpeech
+from astrbot_plugin_ambient_chat.speech.delivery import (
+    Delivery,
+    PreparedSpeech,
+    SendOutcome,
+)
 from astrbot_plugin_ambient_chat.speech.intent import IntentResult
 
 
@@ -102,10 +106,12 @@ class Harness:
         await self.stage("generating", umo)
         return PreparedSpeech(umo, "conversation", "hello")
 
-    async def send(self, speech):
+    async def send(self, speech, *, should_continue=None):
         self.sent.append((speech.umo, asyncio.get_running_loop().time()))
         await self.stage("sending", speech.umo)
-        return self.send_ok
+        if not self.send_ok:
+            return SendOutcome(0, 1, "")
+        return SendOutcome(1, 1, speech.text)
 
     async def record(self, speech):
         self.buffer.append(speech.umo, ChatMessage("我", speech.text, 0, is_bot=True))
@@ -226,6 +232,29 @@ async def test_actual_sends_spaced_after_parallel_generation_and_failed_attempt(
 
 
 @pytest.mark.asyncio
+async def test_segment_abort_reports_partial_and_records_only_sent_text():
+    h = Harness()
+    seen = {}
+
+    async def partial_send(speech, *, should_continue=None):
+        h.sent.append((speech.umo, asyncio.get_running_loop().time()))
+        seen["before"] = should_continue()
+        # 段间发现绑定已停：后面的片段绝不能再发。
+        h.store.bindings["b0"].enabled = False
+        seen["after"] = should_continue()
+        return SendOutcome(1, 2, "第一段。", "cancelled")
+
+    h.delivery.send = partial_send
+    await h.execution.reconcile()
+    result = await h.execution.execute("b0", h.umo(0))
+    assert seen == {"before": True, "after": False}
+    assert result.state == "partial" and result.ok
+    assert "1/2" in result.reason
+    assert h.recorded == [h.umo(0)]
+    assert h.buffer.has(h.umo(0))
+
+
+@pytest.mark.asyncio
 async def test_lower_concurrency_preserves_existing_work_and_next_waits():
     h = Harness()
     h.pause("generating", 0)
@@ -271,12 +300,12 @@ async def test_send_timeout_bounds_wait_even_if_adapter_suppresses_cancellation(
     h = Harness(send_timeout=0.01)
     finished = asyncio.Event()
 
-    async def stubborn_send(speech):
+    async def stubborn_send(speech, **_kwargs):
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             await finished.wait()
-        return True
+        return SendOutcome(1, 1, speech.text)
 
     h.delivery.send = stubborn_send
     await h.execution.reconcile()
@@ -607,7 +636,7 @@ async def test_delivery_stages_keep_generation_separate_from_send_and_history():
     assert speech.text == "hello"
     context.send_message.assert_not_awaited()
     manager.update_conversation.assert_not_awaited()
-    assert await delivery.send(speech)
+    assert (await delivery.send(speech)).complete
     assert not buffer.has(speech.umo)
     assert await delivery.record(speech)
     assert buffer.has(speech.umo)

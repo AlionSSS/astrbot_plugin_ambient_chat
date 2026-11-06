@@ -5,11 +5,19 @@ import { on, state } from '../store.js';
 import { askConfirm, askInfo, toast } from '../ui.js';
 import { $, clone, escapeHtml } from '../util.js';
 
+/** 与后端 `speech/segments.py` 的默认正则保持一致，供「恢复默认」按钮使用。 */
+const DEFAULT_SEGMENT_PATTERN = '.*?[。？！~…]+|.+$';
+
 export function renderSettings() {
   const settings = state.meta?.settings;
   if (!settings) return;
   $('#setting-concurrency').value = settings.concurrency;
   $('#setting-interval').value = settings.send_interval_seconds;
+  $('#setting-segmented-enabled').checked = Boolean(settings.segmented_enabled);
+  $('#setting-segmented-min').value = settings.segmented_interval_min;
+  $('#setting-segmented-max').value = settings.segmented_interval_max;
+  $('#setting-segmented-threshold').value = settings.segmented_threshold;
+  $('#setting-segmented-pattern').value = settings.segmented_pattern || '';
   $('#setting-buffer').value = settings.buffer_size;
   $('#setting-ignored-senders').value = (
     settings.buffer_ignored_sender_ids || []
@@ -19,6 +27,8 @@ export function renderSettings() {
   $('#setting-image-edge').value = settings.image_max_edge;
   $('#setting-image-quality').value = settings.image_quality;
   $('#setting-decision-debug').checked = Boolean(settings.decision_debug_enabled);
+  syncSegmentedFields();
+  syncImageCacheFields();
   state.decisionModels = clone(settings.decision_models || []);
   state.decisionTestResults = {};
   renderDecisionModels();
@@ -28,6 +38,33 @@ export function renderSettings() {
   $('#info-media-path').textContent = state.meta.media_path || '-';
   $('#info-schema').textContent = `v${state.meta.schema_version ?? '-'}`;
   $('#info-error').textContent = state.meta.load_error || '无';
+}
+
+/**
+ * 开关控制的分组：关掉时禁用字段并整体减淡。
+ *
+ * 只减淡不隐藏——隐藏会让面板高度跳动，用户也看不到关掉前的取值。
+ */
+function setGroupDisabled(container, disabled) {
+  if (!container) return;
+  container.classList.toggle('is-disabled', disabled);
+  for (const input of container.querySelectorAll('input, button')) {
+    input.disabled = disabled;
+  }
+}
+
+/** 「分段拟人发言」开关决定下面 4 个字段能不能改。 */
+function syncSegmentedFields() {
+  const enabled = Boolean($('#setting-segmented-enabled')?.checked);
+  const label = $('#setting-segmented-state');
+  if (label) label.textContent = enabled ? '已开启' : '已关闭';
+  setGroupDisabled($('#segmented-fields'), !enabled);
+}
+
+/** 图片最长边与压缩质量只在开启图片缓存时才有意义。 */
+function syncImageCacheFields() {
+  const enabled = Boolean($('#setting-cache-images')?.checked);
+  setGroupDisabled($('#image-cache-fields'), !enabled);
 }
 
 function blankDecisionModel() {
@@ -181,6 +218,11 @@ async function saveSettings() {
     settings: {
       concurrency: Number($('#setting-concurrency').value),
       send_interval_seconds: Number($('#setting-interval').value),
+      segmented_enabled: $('#setting-segmented-enabled').checked,
+      segmented_interval_min: Number($('#setting-segmented-min').value),
+      segmented_interval_max: Number($('#setting-segmented-max').value),
+      segmented_threshold: Number($('#setting-segmented-threshold').value),
+      segmented_pattern: $('#setting-segmented-pattern').value,
       buffer_size: Number($('#setting-buffer').value),
       buffer_ignored_sender_ids: parseSenderIds(
         $('#setting-ignored-senders').value,
@@ -261,6 +303,7 @@ async function guardCacheImagesToggle() {
     if (!(await confirmCacheImagesAdvice())) checkbox.checked = false;
   } finally {
     cacheImagesTogglePending = false;
+    syncImageCacheFields();
   }
 }
 
@@ -278,8 +321,14 @@ async function guardCacheAudioToggle() {
 }
 
 document.addEventListener('change', (event) => {
-  if (event.target.id === 'setting-cache-images') guardCacheImagesToggle();
-  else if (event.target.id === 'setting-cache-audio') guardCacheAudioToggle();
+  if (event.target.id === 'setting-cache-images') {
+    syncImageCacheFields();
+    guardCacheImagesToggle();
+  } else if (event.target.id === 'setting-cache-audio') {
+    guardCacheAudioToggle();
+  } else if (event.target.id === 'setting-segmented-enabled') {
+    syncSegmentedFields();
+  }
 });
 
 /**
@@ -355,6 +404,9 @@ export const actions = {
     renderDecisionModels();
   },
   'data:toggleSecret': (_value, button) => toggleSecret(button),
+  'data:segmentedReset': () => {
+    $('#setting-segmented-pattern').value = DEFAULT_SEGMENT_PATTERN;
+  },
   'data:testDecisionModel': (index) => testDecisionModel(Number(index)),
   'data:removeDecisionModel': (index) => {
     state.decisionModels.splice(Number(index), 1);

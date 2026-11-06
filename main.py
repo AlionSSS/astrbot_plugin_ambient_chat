@@ -70,7 +70,12 @@ class AmbientChatPlugin(Star):
         self.router = DecisionRouter(context, self.store)
         self.account = BotAccountName(context)
         self.judge = IntentJudge(context, self.router, identity=self._identity)
-        self.delivery = Delivery(context, self.buffer, self_name=self._self_name)
+        self.delivery = Delivery(
+            context,
+            self.buffer,
+            self_name=self._self_name,
+            settings=lambda: self.settings,
+        )
         self.lifecycle = BindingLifecycle(self)
         self.execution = SpeechExecution(
             self, accepts=lambda bid, umo: self.lifecycle.accepts(umo, binding_id=bid)

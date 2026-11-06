@@ -52,9 +52,9 @@
                 <button class="help-icon" type="button" aria-label="详细说明" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
-                    <li>规则本身不调度：被「氛围组绑定」引用后才会被触发。</li>
+                    <li><b>规则本身不调度</b>：被「氛围组绑定」引用后才会被触发。</li>
                     <li>四步依次判断：触发入口 → 拦截机制 → 发言意向 → 生成并投递。</li>
-                    <li>拦截条件之间是「或」关系，任一命中即放弃该会话本次发言。</li>
+                    <li>拦截条件之间是<b>「或」关系</b>，任一命中即放弃该会话本次发言。</li>
                     <li>发言意向与对话模型各只能选一个；留空时回退到 AstrBot 默认提供商。</li>
                     <li>规则被绑定引用时不能删除，需先删除引用它的绑定。</li>
                   </ul>
@@ -252,8 +252,9 @@
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
                     <li>启动时先读取该会话的历史预热上下文，按钮转圈期间不能重复点击。</li>
-                    <li>停止的绑定不再调度、不再记录消息，其上下文缓冲会被清空，下次启动重新预热。</li>
-                    <li>「手动触发一次」按会话执行：跳过入口触发与挑选策略，但仍走拦截与意向判断，可能最终不发言。</li>
+                    <li>停止的绑定不再调度、不再记录消息，其<b>上下文缓冲会被清空</b>，下次启动重新预热。</li>
+                    <li>「手动触发一次」按会话执行：跳过入口触发与挑选策略，但仍走拦截与意向判断，<b>可能最终不发言</b>。</li>
+                    <li>一次发言可能按「分段拟人发言」拆成多条消息，逐条发出期间状态一直停在「发送中」，结果按整次发言统计。</li>
                     <li>全局「启用自主发言」是总闸：关闭后只停调度，规则与绑定数据都保留。</li>
                   </ul>
                 </div>
@@ -268,71 +269,138 @@
         <section id="section-settings" class="section hidden">
           <header class="section-head">
             <h1>更多设置</h1>
-            <p class="section-lead">发言节奏、上下文缓冲、决策模型与调试，保存后立即生效。</p>
+            <p class="section-lead">发言节奏、上下文缓冲、决策模型与调试；改完点底部保存，立即生效。</p>
           </header>
 
           <div class="panel">
             <h2>发言节奏</h2>
             <p class="hint">
-              控制同一时刻最多并行几次发言，以及相邻两次发言之间至少隔多久。
+              两次自主发言之间的间隔，以及是否把一次发言切成几段、像打字一样分批发出去。
             </p>
-            <div class="grid">
-              <label class="field">
-                <span>同时进行的发言数上限（1~5，默认 1 串行）</span>
-                <input id="setting-concurrency" type="number" min="1" max="5" />
-              </label>
-              <label class="field">
-                <span>两次发言之间的最小间隔（秒 0~30）</span>
-                <input id="setting-interval" type="number" min="0" max="30" step="0.5" />
-              </label>
-            </div>
+
+            <section class="subpanel">
+              <h3 class="subpanel-title">基础节奏</h3>
+              <div class="grid">
+                <label class="field">
+                  <span>同时进行的发言数上限<em>1~5，默认 1 串行</em></span>
+                  <input id="setting-concurrency" type="number" min="1" max="5" />
+                </label>
+                <label class="field">
+                  <span>两次发言之间的最小间隔<em>秒，0~30</em></span>
+                  <input id="setting-interval" type="number" min="0" max="30" step="0.5" />
+                </label>
+              </div>
+            </section>
+
+            <section class="subpanel">
+              <div class="subpanel-head">
+                <h3 class="subpanel-title">分段拟人发言</h3>
+                <label class="switch">
+                  <input id="setting-segmented-enabled" type="checkbox" />
+                  <span id="setting-segmented-state">已开启</span>
+                </label>
+              </div>
+              <p class="hint">
+                按正则把正文切成片段逐条发送，片段之间随机等待。
+                正文超过字数阈值、片段超过 8 条或正则匹配不满全文时整条直发。
+              </p>
+              <div class="grid" id="segmented-fields">
+                <label class="field">
+                  <span>片段间隔最小值<em>秒，0~30</em></span>
+                  <input id="setting-segmented-min" type="number" min="0" max="30" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>片段间隔最大值<em>秒，0~30</em></span>
+                  <input id="setting-segmented-max" type="number" min="0" max="30" step="0.1" />
+                </label>
+                <label class="field">
+                  <span>分段字数阈值<em>1~2000，超过则整条直发</em></span>
+                  <input id="setting-segmented-threshold" type="number" min="1" max="2000" step="10" />
+                </label>
+                <div class="field span-all">
+                  <span>分段正则<em>需匹配完整正文，否则该次不分段</em></span>
+                  <span class="field-with-action">
+                    <input id="setting-segmented-pattern" type="text" maxlength="500" />
+                    <button class="btn small ghost" type="button" data-segmented-reset="1"
+                      title="把正则恢复成默认值">恢复默认</button>
+                  </span>
+                </div>
+              </div>
+            </section>
           </div>
 
           <div class="panel">
-            <h2>上下文缓冲</h2>
-            <p class="hint">
-              决定每个会话记住多少近期消息、要过滤掉谁的消息，以及是否把图片与语音也缓存下来。
+            <h2>上下文缓冲
               <span class="section-help pop-anchor-right">
                 <button class="help-icon" type="button" aria-label="关于上下文缓冲" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
-                <span class="help-pop" role="note">文本仅存内存，重启后清空。<br />缓冲条数不建议过多，只要保证能覆盖「注入最近对话条数」需要的量即可。<br />「过滤的用户 ID」里的用户消息不再进入缓冲，机器人发言不再考虑这些用户的消息。机器人自己的发言不受影响。<br />图片落盘时按「最长边」等比缩小、以「压缩质量」重编码（会损失画质）以节省磁盘；小图与压缩后反而更大的图保留原样。<br />语音原样转存，默认关闭；条数跟着缓冲条数走，随消息淘汰删除，只有支持音频输入的模型能用上。</span>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>文本仅存内存，重启后清空。</li>
+                    <li>缓冲条数不建议过多，只要保证能覆盖「注入最近对话条数」需要的量即可。</li>
+                    <li>「过滤的用户 ID」里的用户消息不再进入缓冲，机器人发言不再考虑这些用户的消息；<b>机器人自己的发言不受影响</b>。</li>
+                    <li>图片落盘时按「最长边」等比缩小、以「压缩质量」重编码（<b>会损失画质</b>）以节省磁盘；小图与压缩后反而更大的图保留原样。</li>
+                    <li>语音原样转存，默认关闭；条数跟着缓冲条数走，随消息淘汰删除，<b>只有支持音频输入的模型能用上</b>。</li>
+                  </ul>
+                </div>
               </span>
+            </h2>
+            <p class="hint">
+              决定每个会话记住多少近期消息、过滤谁的消息，以及是否把图片与语音也缓存下来。
             </p>
-            <div class="grid">
-              <label class="field">
-                <span>每个会话保留的近期消息条数（10~1000）</span>
-                <input id="setting-buffer" type="number" min="10" max="1000" step="10" />
-              </label>
-              <label class="field">
-                <span>过滤的用户 ID（例如QQ号，多个用逗号分隔）</span>
-                <input id="setting-ignored-senders" type="text" placeholder="例如：10001, 10002" />
-              </label>
-              <label class="field inline">
-                <span>是否缓存图片</span>
-                <input id="setting-cache-images" type="checkbox" />
-              </label>
-              <label class="field">
-                <span>缓存图片最长边（像素 320~2048）</span>
-                <input id="setting-image-edge" type="number" min="320" max="2048" step="160" />
-              </label>
-              <label class="field">
-                <span>缓存图片压缩质量（40~95）</span>
-                <input id="setting-image-quality" type="number" min="40" max="95" step="5" />
-              </label>
-              <label class="field inline">
-                <span>是否缓存语音</span>
-                <input id="setting-cache-audio" type="checkbox" />
-              </label>
-            </div>
+
+            <section class="subpanel">
+              <h3 class="subpanel-title">缓冲内容</h3>
+              <div class="grid">
+                <label class="field">
+                  <span>每个会话保留的近期消息条数<em>10~1000</em></span>
+                  <input id="setting-buffer" type="number" min="10" max="1000" step="10" />
+                </label>
+                <label class="field span-all">
+                  <span>过滤的用户 ID<em>例如 QQ 号，多个用逗号分隔</em></span>
+                  <input id="setting-ignored-senders" type="text" placeholder="例如：10001, 10002" />
+                </label>
+              </div>
+            </section>
+
+            <section class="subpanel">
+              <h3 class="subpanel-title">媒体缓存</h3>
+              <div class="media-toggles">
+                <label class="switch">
+                  <input id="setting-cache-images" type="checkbox" />
+                  <span>缓存图片</span>
+                </label>
+                <label class="switch">
+                  <input id="setting-cache-audio" type="checkbox" />
+                  <span>缓存语音</span>
+                </label>
+              </div>
+              <div class="grid" id="image-cache-fields">
+                <label class="field">
+                  <span>缓存图片最长边<em>像素，320~2048</em></span>
+                  <input id="setting-image-edge" type="number" min="320" max="2048" step="160" />
+                </label>
+                <label class="field">
+                  <span>缓存图片压缩质量<em>40~95，越低越省磁盘</em></span>
+                  <input id="setting-image-quality" type="number" min="40" max="95" step="5" />
+                </label>
+              </div>
+            </section>
           </div>
 
           <div class="panel">
-            <h2>决策模型</h2>
-            <p class="hint">
-              自定义 SystemOne 兼容端点，供规则第 3 步「发言意向」选择，与 AstrBot 官方判断提供商并列显示。
+            <h2>决策模型
               <span class="section-help pop-anchor-right">
                 <button class="help-icon" type="button" aria-label="关于 criteria" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
-                <span class="help-pop" role="note">本插件会自动传入 criteria，用于更合理的决策，同时兼容书生端砚这类要求 criteria 判定标准必填的平台。</span>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>本插件会自动传入 criteria，用于更合理的决策。</li>
+                    <li>兼容书生端砚这类要求 criteria 判定标准必填的平台。</li>
+                  </ul>
+                </div>
               </span>
+            </h2>
+            <p class="hint">
+              自定义 SystemOne 兼容端点，供规则第 3 步「发言意向」选择，与 AstrBot 官方判断提供商并列显示。
             </p>
             <div id="decision-models" class="stack"></div>
             <p class="hint hidden" id="decision-models-empty">还没有自定义决策模型。</p>
@@ -343,10 +411,13 @@
 
           <div class="panel">
             <h2>调试</h2>
-            <label class="field inline">
-              <span>记录决策调试日志（默认关闭）</span>
-              <input id="setting-decision-debug" type="checkbox" />
-            </label>
+            <div class="setting-line">
+              <label class="switch">
+                <input id="setting-decision-debug" type="checkbox" />
+                <span>记录决策调试日志</span>
+              </label>
+              <span class="tag">默认关闭</span>
+            </div>
             <p class="hint">
               开启后记录完整决策请求与响应，包含人格和聊天内容。仅在排查问题时开启，
               保存后生效；关闭后停止记录，已有文件保留。日志位于插件数据目录的
@@ -354,7 +425,8 @@
             </p>
           </div>
 
-          <div class="row-actions">
+          <div class="settings-actions">
+            <span class="hint">改完点右侧保存才会生效，保存后立即应用。</span>
             <button id="btn-save-settings" class="btn primary" type="button">
               保存设置
             </button>

@@ -476,7 +476,10 @@ class AmbientScheduler:
             return
         unknown = sum(outcome.state == "unknown" for outcome in outcomes)
         history_failed = sum(outcome.state == "history_failed" for outcome in outcomes)
+        partial = sum(outcome.state == "partial" for outcome in outcomes)
         summary = f"触发 {len(selected)} 个，确认发言 {len(spoken)} 个"
+        if partial:
+            summary += f"，部分发送 {partial} 个"
         if unknown:
             summary += f"，发送结果未知 {unknown} 个"
         if history_failed:

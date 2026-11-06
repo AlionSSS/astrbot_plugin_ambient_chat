@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 
+from ..speech.delivery import PreparedSpeech
+
 if TYPE_CHECKING:
     from ..main import AmbientChatPlugin
 
@@ -22,7 +24,14 @@ class SpeechResult:
 
     @property
     def ok(self) -> bool:
-        return self.state in {"sent", "history_failed"}
+        """``partial`` 也算说过话：只发出一部分片段仍是确切的事实。"""
+        return self.state in {"sent", "history_failed", "partial"}
+
+
+def _partial_reason(outcome: Any) -> str:
+    if outcome.stopped_by == "cancelled":
+        return f"已发 {outcome.sent}/{outcome.total} 段，其余因停止或配置变更未发"
+    return f"已发 {outcome.sent}/{outcome.total} 段，第 {outcome.sent + 1} 段发送失败"
 
 
 @dataclass(slots=True)
@@ -331,27 +340,44 @@ class SpeechExecution:
             except asyncio.CancelledError:
                 send.cancel()
                 raise
-        try:
-            deadline = (self._last_send or loop.time()) + self._send_timeout
-            sent = await self._bounded(send, max(0, deadline - loop.time()))
-        except TimeoutError:
-            return SpeechResult("unknown", "发送结果未知（等待超过 60 秒，不自动重发）")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[Ambient] 发送异常（%s）：%s", umo, exc)
-            return SpeechResult("unknown", "发送异常，结果未知（不自动重发）")
-        if isinstance(sent, SpeechResult):
-            return sent
-        if not sent:
+            # 发送锁罩住整次投递（含所有分段），间隔基准才会落在收尾时刻。
+            deadline = loop.time() + self._send_timeout
+            try:
+                outcome = await self._bounded(send, max(0, deadline - loop.time()))
+            except TimeoutError:
+                outcome = SpeechResult(
+                    "unknown", "发送结果未知（等待超过 60 秒，不自动重发）"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[Ambient] 发送异常（%s）：%s", umo, exc)
+                outcome = SpeechResult("unknown", "发送异常，结果未知（不自动重发）")
+            finally:
+                self._last_send = loop.time()
+
+        if isinstance(outcome, SpeechResult):
+            return outcome
+        if not outcome.sent:
             return SpeechResult("skipped", "发送失败")
         run.phase = "recording"
+        # 部分发送只记实际发出的片段，否则历史里会出现没说过的话。
+        record_speech = (
+            speech
+            if outcome.complete
+            else PreparedSpeech(speech.umo, speech.conversation_id, outcome.text)
+        )
         try:
             recorded = await self._bounded(
-                asyncio.create_task(plugin.delivery.record(speech)),
+                asyncio.create_task(plugin.delivery.record(record_speech)),
                 self._record_timeout,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 已发送但历史记录失败（%s）：%s", umo, exc)
             recorded = False
+        if not outcome.complete:
+            reason = _partial_reason(outcome)
+            if not recorded:
+                reason = f"{reason}，会话历史记录失败"
+            return SpeechResult("partial", reason)
         if not recorded:
             return SpeechResult("history_failed", "已发送，但会话历史记录失败")
         return SpeechResult("sent", f"已发言（{intent.reason}）")
@@ -370,10 +396,11 @@ class SpeechExecution:
         )
         if blocked.blocked:
             return SpeechResult("skipped", blocked.reason)
-        # 从复核到实际调用发送不让出控制权；失败尝试也消耗发送间隔。
+        # 从复核到实际调用发送不让出控制权；段间用 _valid 判断还要不要发下一段。
         run.phase = "sending"
-        self._last_send = asyncio.get_running_loop().time()
-        return await self._plugin.delivery.send(speech)
+        return await self._plugin.delivery.send(
+            speech, should_continue=lambda: self._valid(key, run)
+        )
 
     async def _bounded(self, task: asyncio.Task, timeout: float) -> Any:
         # wait_for 会等待协程响应取消，无法保证本地等待上限。

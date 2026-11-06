@@ -19,7 +19,7 @@ from astrbot_plugin_ambient_chat.runtime.configuration import ConfigurationAppli
 from astrbot_plugin_ambient_chat.runtime.execution import SpeechExecution
 from astrbot_plugin_ambient_chat.runtime.scheduler import AmbientScheduler
 from astrbot_plugin_ambient_chat.speech.blockers import BlockerChain
-from astrbot_plugin_ambient_chat.speech.delivery import PreparedSpeech
+from astrbot_plugin_ambient_chat.speech.delivery import PreparedSpeech, SendOutcome
 from astrbot_plugin_ambient_chat.speech.intent import IntentResult
 
 TZ = ZoneInfo("UTC")
@@ -104,7 +104,7 @@ class Runtime:
         )
         self.delivery = SimpleNamespace(
             prepare=AsyncMock(return_value=PreparedSpeech(umo(), "cid", "新发言")),
-            send=AsyncMock(return_value=True),
+            send=AsyncMock(return_value=SendOutcome(1, 1, "新发言")),
             record=self.record,
         )
         self.lifecycle = BindingLifecycle(self)
@@ -311,10 +311,10 @@ async def test_stopping_guards_binding_but_does_not_block_unrelated_binding(runt
     await h.lifecycle.start("b0")
     sending, release = asyncio.Event(), asyncio.Event()
 
-    async def send(speech):
+    async def send(speech, **_kwargs):
         sending.set()
         await release.wait()
-        return True
+        return SendOutcome(1, 1, speech.text)
 
     h.delivery.send.side_effect = send
     execution = asyncio.create_task(h.scheduler.trigger_target("b0", umo()))

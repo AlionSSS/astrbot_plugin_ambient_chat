@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -35,6 +36,18 @@ from ..conversation.media_store import (
     MAX_IMAGE_QUALITY,
     MIN_IMAGE_MAX_EDGE,
     MIN_IMAGE_QUALITY,
+)
+from ..speech.segments import (
+    DEFAULT_SEGMENT_ENABLED,
+    DEFAULT_SEGMENT_INTERVAL_MAX,
+    DEFAULT_SEGMENT_INTERVAL_MIN,
+    DEFAULT_SEGMENT_PATTERN,
+    DEFAULT_SEGMENT_THRESHOLD,
+    MAX_SEGMENT_INTERVAL,
+    MAX_SEGMENT_THRESHOLD,
+    MIN_SEGMENT_INTERVAL,
+    MIN_SEGMENT_THRESHOLD,
+    validate_pattern,
 )
 
 DEFAULT_CONTEXT_TURNS = 20
@@ -180,6 +193,15 @@ class Settings:
 
     concurrency: int = DEFAULT_CONCURRENCY
     send_interval_seconds: float = DEFAULT_SEND_INTERVAL_SECONDS
+    segmented_enabled: bool = DEFAULT_SEGMENT_ENABLED
+    """分段拟人发言：把正文切成片段逐条发送，模拟打字间隔。"""
+    segmented_interval_min: float = DEFAULT_SEGMENT_INTERVAL_MIN
+    segmented_interval_max: float = DEFAULT_SEGMENT_INTERVAL_MAX
+    """片段之间的随机等待区间（秒）；第一段不等。"""
+    segmented_threshold: int = DEFAULT_SEGMENT_THRESHOLD
+    """原文长度超过它就不分段，整条直发（口径与核心一致：原文 len）。"""
+    segmented_pattern: str = DEFAULT_SEGMENT_PATTERN
+    """切分正则；匹配必须覆盖全文，覆盖不上则该次整条直发。"""
     buffer_size: int = DEFAULT_BUFFER_SIZE
     cache_images: bool = DEFAULT_CACHE_IMAGES
     cache_audio: bool = DEFAULT_CACHE_AUDIO
@@ -201,6 +223,11 @@ class Settings:
         return {
             "concurrency": self.concurrency,
             "send_interval_seconds": self.send_interval_seconds,
+            "segmented_enabled": self.segmented_enabled,
+            "segmented_interval_min": self.segmented_interval_min,
+            "segmented_interval_max": self.segmented_interval_max,
+            "segmented_threshold": self.segmented_threshold,
+            "segmented_pattern": self.segmented_pattern,
             "buffer_size": self.buffer_size,
             "cache_images": self.cache_images,
             "cache_audio": self.cache_audio,
@@ -238,6 +265,51 @@ class Settings:
                 "两次发言之间的最小间隔需在 "
                 f"{MIN_SEND_INTERVAL_SECONDS:g}~{MAX_SEND_INTERVAL_SECONDS:g} 秒之间"
             )
+
+        segmented_enabled = _parse_bool(
+            raw.get("segmented_enabled"), DEFAULT_SEGMENT_ENABLED
+        )
+        try:
+            segment_min = float(
+                raw.get("segmented_interval_min", DEFAULT_SEGMENT_INTERVAL_MIN)
+            )
+            segment_max = float(
+                raw.get("segmented_interval_max", DEFAULT_SEGMENT_INTERVAL_MAX)
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuleError("片段之间的等待区间必须是数字") from exc
+        if not (
+            MIN_SEGMENT_INTERVAL <= segment_min <= MAX_SEGMENT_INTERVAL
+            and MIN_SEGMENT_INTERVAL <= segment_max <= MAX_SEGMENT_INTERVAL
+        ):
+            raise RuleError(
+                "片段之间的等待区间需在 "
+                f"{MIN_SEGMENT_INTERVAL:g}~{MAX_SEGMENT_INTERVAL:g} 秒之间"
+            )
+        if segment_max < segment_min:
+            raise RuleError("片段等待区间的最大值不能小于最小值")
+
+        try:
+            segment_threshold = int(
+                raw.get("segmented_threshold", DEFAULT_SEGMENT_THRESHOLD)
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuleError("分段字数阈值必须是整数") from exc
+        if not MIN_SEGMENT_THRESHOLD <= segment_threshold <= MAX_SEGMENT_THRESHOLD:
+            raise RuleError(
+                f"分段字数阈值需在 {MIN_SEGMENT_THRESHOLD}~{MAX_SEGMENT_THRESHOLD} 之间"
+            )
+
+        raw_pattern = raw.get("segmented_pattern")
+        segment_pattern = (
+            DEFAULT_SEGMENT_PATTERN if raw_pattern is None else str(raw_pattern).strip()
+        )
+        if not segment_pattern:
+            raise RuleError("分段正则不能为空")
+        try:
+            validate_pattern(segment_pattern)
+        except (re.error, ValueError) as exc:
+            raise RuleError(f"分段正则无效：{exc}") from exc
 
         try:
             buffer_size = int(raw.get("buffer_size", DEFAULT_BUFFER_SIZE))
@@ -281,6 +353,11 @@ class Settings:
         return cls(
             concurrency=concurrency,
             send_interval_seconds=interval,
+            segmented_enabled=segmented_enabled,
+            segmented_interval_min=segment_min,
+            segmented_interval_max=segment_max,
+            segmented_threshold=segment_threshold,
+            segmented_pattern=segment_pattern,
             buffer_size=buffer_size,
             cache_images=cache_images,
             cache_audio=cache_audio,

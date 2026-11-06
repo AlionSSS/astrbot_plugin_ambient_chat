@@ -272,12 +272,21 @@ code {
   left: 0;
   z-index: 30;
   width: max-content;
-  max-width: 340px;
+  /* 340px 是宽屏的舒适宽度；窄屏时按视口收窄，避免向左展开时越过屏幕左边界
+     （88px = body 左右 padding + 面板内 padding + 一点余量） */
+  max-width: min(340px, calc(100vw - 88px));
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  /* 弹窗可能挂在 h1 旁也可能挂在面板 h2 里：这里把字体与颜色定死，
+     不随父级标题的字号/颜色变化。
+     font-weight 必须显式给：h2 自带 bold，弹窗挂在面板标题里会整体变粗。 */
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-4px);
@@ -807,6 +816,17 @@ code {
   margin-top: 0;
 }
 
+/* 面板标题行：信息图标靠右，它的悬浮说明才有向左展开的空间 */
+.panel > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel > h2 .section-help {
+  margin-left: auto;
+}
+
 /* ------------------------------------------------------------------ 表单 */
 .grid {
   display: grid;
@@ -1043,6 +1063,168 @@ input[type="password"]::-ms-clear {
 .secret-field {
   position: relative;
   display: flex;
+}
+
+/* 输入框 + 行内按钮（例如「恢复默认」）：按钮不参与 label 的点击聚焦。 */
+.field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-with-action input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* -------------------------------------------- 更多设置：小节、开关与吸底操作条 */
+
+/* 面板内的二级分组：小节之间用虚线分隔，避免一长串字段糊成一片 */
+.subpanel + .subpanel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.subpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.subpanel-title {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.subpanel-head .subpanel-title {
+  margin: 0;
+}
+
+/* 字段名里灰色的补充说明（单位、范围），与标题拉开层次 */
+.field > span em {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  opacity: 0.8;
+}
+
+/* 独占整行：长输入（正则、用户 ID 列表）铺满网格 */
+.span-all {
+  grid-column: 1 / -1;
+}
+
+/* 开关：用滑块形态区分「是否启用」，与数值输入不在视觉上抢位置 */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--line);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: background 0.15s ease;
+}
+
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+.switch input:checked {
+  background: var(--accent);
+}
+
+.switch input:checked::after {
+  transform: translateX(16px);
+}
+
+.switch input:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.media-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+/* 被上级开关关掉的字段整体减淡，值仍然可见（不做成隐藏，避免布局跳动）。
+   输入框本身的变淡来自全局 input:disabled，这里只补上字段名。 */
+.grid.is-disabled .field > span {
+  opacity: 0.5;
+}
+
+.setting-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tag {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 保存条吸在视口底部：设置项变长后不必滚回顶部找按钮 */
+.settings-actions {
+  position: sticky;
+  bottom: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.14);
+}
+
+.settings-actions .hint {
+  margin: 0;
+}
+
+/* 吸底条也是流内元素：与上下板块保持和面板之间一致的间距 */
+.settings-actions + .panel {
+  margin-top: 14px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .secret-field input {
@@ -1558,6 +1740,16 @@ input[type="password"]::-ms-clear {
   .nav {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+
+  /* 窄屏：小节标题与开关允许换行，保存条的说明与按钮也各占一行 */
+  .subpanel-head,
+  .settings-actions {
+    flex-wrap: wrap;
+  }
+
+  .kv {
+    grid-template-columns: 128px minmax(0, 1fr);
   }
 
   .binding-page {

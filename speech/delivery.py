@@ -9,7 +9,9 @@ assistant 追加进当前会话历史，让用户回复时核心能感知到。
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +30,8 @@ from ..common import (
 )
 from ..conversation.context_buffer import ContextBuffer
 from ..conversation.messages import SELF_NAME, ChatMessage
+from ..rules.models import Settings
+from .segments import is_blocked_platform, split
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
@@ -48,6 +52,24 @@ class PreparedSpeech:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class SendOutcome:
+    """一次投递实际发出去多少：片段数 + 真正发出的文本。
+
+    ``stopped_by`` 为空表示全部片段都发了；``failed`` 是某段发送失败后中止剩余，
+    ``cancelled`` 是段间发现执行已失效（停止绑定、配置变更）而中止。
+    """
+
+    sent: int
+    total: int
+    text: str
+    stopped_by: str = ""
+
+    @property
+    def complete(self) -> bool:
+        return self.total > 0 and self.sent == self.total
+
+
 class Delivery:
     """把一次「想说的内容」变成一次真实发言。"""
 
@@ -57,11 +79,14 @@ class Delivery:
         buffer: ContextBuffer,
         *,
         self_name: Callable[[str], str] | None = None,
+        settings: Callable[[], Settings] | None = None,
     ) -> None:
         self._context = context
         self._buffer = buffer
         self._self_name = self_name
         """机器人自身的署名来源；缺省时用「我」，测试与旧调用方不必提供。"""
+        self._settings: Callable[[], Settings] = settings or Settings
+        """运行参数来源；缺省时用默认值，测试与旧调用方不必提供。"""
         self._timezone: tzinfo | None = None
 
     async def prepare(
@@ -222,24 +247,98 @@ class Delivery:
 
         return PreparedSpeech(umo, conversation_id, text)
 
-    async def send(self, speech: PreparedSpeech) -> bool:
-        umo, text = speech.umo, speech.text
-        try:
-            sent = await self._context.send_message(umo, MessageChain().message(text))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[Ambient] 发送失败：%s: %s（%s）%s",
-                type(exc).__name__,
-                exc,
-                umo,
-                _send_hint(exc),
-            )
-            raise
-        if not sent:
-            logger.warning("[Ambient] 未找到 %s 对应的平台实例，消息未发送。", umo)
-            return False
+    async def send(
+        self,
+        speech: PreparedSpeech,
+        *,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> SendOutcome:
+        """按「分段拟人发言」逐段发送；``should_continue`` 在段间被问一次。
 
-        return True
+        第一段不等待。第 1 段就失败时抛异常 / 返回 0 段，与单条发送的语义一致；
+        后续某段失败或中止只记部分发送，已发出的片段照旧保留。
+        """
+        umo = speech.umo
+        segments = self._segments(umo, speech.text)
+        settings = self._settings()
+        sent_text: list[str] = []
+        stopped_by = ""
+        for index, segment in enumerate(segments):
+            if index:
+                if should_continue is not None and not should_continue():
+                    logger.info(
+                        "[Ambient] 段间中止投递（%s）：已发 %d/%d 段。",
+                        umo,
+                        len(sent_text),
+                        len(segments),
+                    )
+                    stopped_by = "cancelled"
+                    break
+                await asyncio.sleep(
+                    random.uniform(
+                        settings.segmented_interval_min,
+                        settings.segmented_interval_max,
+                    )
+                )
+            try:
+                ok = await self._context.send_message(
+                    umo, MessageChain().message(segment)
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not sent_text:
+                    logger.warning(
+                        "[Ambient] 发送失败：%s: %s（%s）%s",
+                        type(exc).__name__,
+                        exc,
+                        umo,
+                        _send_hint(exc),
+                    )
+                    raise
+                logger.warning(
+                    "[Ambient] 第 %d/%d 段发送失败，中止剩余片段（%s）：%s",
+                    index + 1,
+                    len(segments),
+                    umo,
+                    exc,
+                )
+                stopped_by = "failed"
+                break
+            if not ok:
+                if not sent_text:
+                    logger.warning(
+                        "[Ambient] 未找到 %s 对应的平台实例，消息未发送。", umo
+                    )
+                    break
+                logger.warning(
+                    "[Ambient] 第 %d/%d 段未发送成功，中止剩余片段（%s）。",
+                    index + 1,
+                    len(segments),
+                    umo,
+                )
+                stopped_by = "failed"
+                break
+            sent_text.append(segment)
+
+        return SendOutcome(
+            sent=len(sent_text),
+            total=len(segments),
+            text="".join(sent_text),
+            stopped_by=stopped_by,
+        )
+
+    def _segments(self, umo: str, text: str) -> list[str]:
+        """本次该发几条：关闭、平台不支持或不适合作切分时只有一条。"""
+        settings = self._settings()
+        if not settings.segmented_enabled:
+            return [text]
+        target = parse_target(umo)
+        if target is None or is_blocked_platform(target.platform_id):
+            return [text]
+        return split(
+            text,
+            threshold=settings.segmented_threshold,
+            pattern=settings.segmented_pattern,
+        )
 
     async def record(self, speech: PreparedSpeech) -> bool:
         """确认发送后更新缓冲，再写入核心历史；失败不抹去已发送事实。"""
