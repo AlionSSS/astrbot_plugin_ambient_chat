@@ -207,6 +207,7 @@ class ContextBuffer:
         ):
             return
         self._push(buffer, message)
+        self._adopt_private_name(umo, buffer, message)
         self._activity.setdefault(umo, _Activity()).record(message)
         self._trim_media(buffer)
         if image_components and self._media_enabled and not message.is_bot:
@@ -223,6 +224,28 @@ class ContextBuffer:
             self._audio_captures[id(message)] = task
             self._media_tasks.add(task)
             task.add_done_callback(self._media_tasks.discard)
+
+    def _adopt_private_name(
+        self, umo: str, buffer: deque[ChatMessage], message: ChatMessage
+    ) -> None:
+        """私聊只有一个对方：学到昵称后回填该会话里还没名字的旧消息。
+
+        私聊预热读的是核心 LLM 会话历史，本身不带发送者，条目只能渲染成「某人」
+        （见 ADR-0020）。等对方发来下一条消息才第一次拿到昵称，此时把旧条目一起
+        补上；否则同一段对话里前面几条是「某人」、后面几条是真名，模型会当成两个人。
+        """
+        if message.is_bot:
+            return
+        name = message.sender_name.strip()
+        if not name or name == message.sender_id.strip():
+            return
+        target = parse_target(umo)
+        if target is None or target.is_group:
+            # 群聊里的「没名字」不能归给刚发言的这个人。
+            return
+        for item in buffer:
+            if not item.is_bot and not item.sender_name.strip():
+                item.sender_name = name
 
     async def _capture_media(
         self, umo: str, message: ChatMessage, components: Sequence[Any]
