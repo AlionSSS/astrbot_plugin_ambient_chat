@@ -73,9 +73,13 @@ export function renderStatus() {
           const forceTitle = running
             ? '立即对该会话执行一次完整判断（拦截 → 意向 → 投递）'
             : '绑定已停止，启动后才能手动触发';
+          // 决策失败（含平台内容审核拒绝）不是普通跳过：单独标红，页面直接给出原因。
+          const failed = target.state === 'decision_failed';
+          const phase = ({ queued: '等待并发名额', judging: '判断中', generating: '生成中', pacing: '等待发送时机', sending: '发送中', recording: '记录中' })[target.phase];
+          const resultText = phase || target.last_result || '-';
           return `<li>
             <code>${escapeHtml(target.umo)}</code>
-            <span class="muted">${escapeHtml(({ queued: '等待并发名额', judging: '判断中', generating: '生成中', pacing: '等待发送时机', sending: '发送中', recording: '记录中' })[target.phase] || target.last_result || '-')}</span>
+            <span class="${failed && !phase ? 'failed' : 'muted'}"${failed ? ' title="决策模型判定失败，本次未发送消息；页面轮询期间会保留这条原因"' : ''}>${escapeHtml(resultText)}</span>
             <em title="本插件在该会话最近一次成功自主发言的时间，普通对话回复不计入">${escapeHtml(target.last_fire_at || '-')}</em>
             <button class="btn small ghost" type="button" title="查看该会话的上下文缓冲（只读）"
               data-buffer-binding="${escapeHtml(item.binding_id)}"

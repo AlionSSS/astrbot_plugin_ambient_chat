@@ -60,6 +60,7 @@ __all__ = [
     "SystemOneClient",
     "SystemOneConfig",
     "SystemOneConfigError",
+    "SystemOneContentRejected",
     "SystemOneError",
     "SystemOneRequestError",
     "SystemOneResponseError",
@@ -115,6 +116,20 @@ class SystemOneTimeout(SystemOneRequestError):
 
 class SystemOneResponseError(SystemOneError):
     """响应不符合 SystemOne 协议：非 JSON、结构不对、概率分布自相矛盾等。"""
+
+
+class SystemOneContentRejected(SystemOneResponseError):
+    """平台内容审核拒绝了请求（如 ``content_check_rejected``）。
+
+    与普通协议错误区分开：请求格式、字段、鉴权都没问题，是**内容**被判为
+    敏感，用户该改的是会话内容或人格提示，不是端点配置。
+    """
+
+    def __init__(self, message: str, *, code: str = "", detail: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
+        """平台返回的原始说明，页面与日志可直接展示。"""
 
 
 # --------------------------------------------------------------------- 请求模型
@@ -624,6 +639,10 @@ class SystemOneClient:
             if response.status_code < 400:
                 return response
             detail = _error_detail(response)
+            rejected = _content_check_rejection(response.text)
+            if rejected is not None:
+                # 内容审核不会因为重试而通过，直接给出可读原因。
+                raise rejected
             if response.status_code in _RETRY_STATUS and attempt <= retries:
                 await _backoff(attempt)
                 continue
@@ -637,12 +656,25 @@ class SystemOneClient:
         try:
             data = response.json()
         except ValueError as exc:
+            # 部分平台（如书生端砚）用 200 + ``data: {"error": ...}`` 表示内容被拦，
+            # 这不是协议错误，必须让用户看到「审核未通过」而不是「不是合法 JSON」。
+            rejected = _content_check_rejection(response.text)
+            if rejected is not None:
+                raise rejected from exc
             raise SystemOneResponseError(
                 f"SystemOne 响应不是合法 JSON：{_truncate(response.text)}"
             ) from exc
         if not isinstance(data, Mapping):
             raise SystemOneResponseError(
                 f"SystemOne 响应根节点必须是对象：{_summarize(data)}"
+            )
+        rejected = _content_check_from_payload(data)
+        if rejected is not None:
+            raise rejected
+        code, message = _error_envelope(data)
+        if code or message:
+            raise SystemOneResponseError(
+                f"SystemOne 返回错误（{code or 'unknown'}）：{_truncate(message)}"
             )
         try:
             parsed = _SystemOneResponse.model_validate(data)
@@ -869,6 +901,71 @@ def _ensure_argmax(
 async def _backoff(attempt: int) -> None:  # pragma: no cover - 仅在重试时触发
     delay = min(_MAX_BACKOFF_SECONDS, 0.2 * (2 ** (attempt - 1)))
     await asyncio.sleep(delay)
+
+
+_CONTENT_CHECK_TAG = "content_check"
+"""平台内容审核错误的 code / type 片段（如 ``content_check_rejected``）。"""
+
+
+def _error_envelope(payload: Any) -> tuple[str, str]:
+    """取出「错误信封」里的 ``(code, message)``；不是错误响应时返回两个空串。
+
+    兼容 ``{"error": {...}}``、``{"detail": {...}}``，以及 ``detail`` 里再包
+    一层 ``error`` 的 OpenAI 风格响应。
+    """
+    if not isinstance(payload, Mapping):
+        return "", ""
+    for key in ("error", "detail"):
+        item = payload.get(key)
+        if not isinstance(item, Mapping):
+            continue
+        nested = item.get("error")
+        error = nested if isinstance(nested, Mapping) else item
+        code = str(error.get("code") or error.get("type") or "")
+        message = str(error.get("message") or "")
+        if code or message:
+            return code, message
+    return "", ""
+
+
+def _error_payloads(text: str) -> list[Any]:
+    """响应体可能是纯 JSON，也可能是 ``data: {...}`` 的流式帧，两种都解一遍。"""
+    candidates = [(text or "").strip()]
+    candidates.extend(
+        line[len("data:") :].strip()
+        for line in (text or "").splitlines()
+        if line.startswith("data:")
+    )
+    payloads: list[Any] = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payloads.append(json.loads(candidate))
+        except ValueError:
+            continue
+    return payloads
+
+
+def _content_check_rejection(text: str) -> SystemOneContentRejected | None:
+    """响应文本是内容审核拒绝时返回专用异常，否则返回 ``None``。"""
+    for payload in _error_payloads(text):
+        rejected = _content_check_from_payload(payload)
+        if rejected is not None:
+            return rejected
+    return None
+
+
+def _content_check_from_payload(payload: Any) -> SystemOneContentRejected | None:
+    code, message = _error_envelope(payload)
+    if _CONTENT_CHECK_TAG not in code.lower():
+        return None
+    detail = _truncate(message) or _truncate(code)
+    return SystemOneContentRejected(
+        f"内容审核未通过（{code}）：{detail}",
+        code=code,
+        detail=detail,
+    )
 
 
 def _error_detail(response: httpx.Response) -> str:

@@ -25,7 +25,7 @@ from ..conversation.messages import (
     format_time,
 )
 from ..rules.models import Rule
-from .decision import DecisionRouter, NoulPrompt
+from .decision import DecisionContentRejected, DecisionRouter, NoulPrompt
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
@@ -33,6 +33,17 @@ if TYPE_CHECKING:
 MODE_CONTINUE = "continue"
 MODE_NEW_TOPIC = "new_topic"
 MODE_DIRECT = "direct"
+
+FAILURE_CONTENT_REJECTED = "content_rejected"
+FAILURE_DECISION = "decision_failed"
+"""判定失败分类：页面按它标红并给出提示，不把「失败」混进普通「跳过」。"""
+
+REASON_CONTENT_REJECTED = (
+    "决策失败：决策平台内容审核未通过（会话含敏感内容），本次已跳过"
+)
+
+REASON_DETAIL_LIMIT = 160
+"""失败原因在页面上最多显示的字符数，完整信息仍写进 WARNING 与调试日志。"""
 
 HINT_CONTINUE = (
     f"{AMBIENT_HINT_PREFIX}，但你正好想接一句。请顺着最近的对话，"
@@ -85,6 +96,8 @@ class IntentResult:
     speak: bool
     mode: str = MODE_CONTINUE
     reason: str = ""
+    failure: str = ""
+    """判定失败分类（见 :data:`FAILURE_DECISION` 等）；未失败时为空串。"""
 
     @property
     def hint(self) -> str:
@@ -164,12 +177,31 @@ class IntentJudge:
                 prompts,
                 state,
             )
+        except DecisionContentRejected as exc:
+            # 请求格式没问题，是内容被平台判为敏感：页面要提示改内容，而不是改配置。
+            logger.warning("[Ambient] 决策模型内容审核未通过，跳过本次发言：%s", exc)
+            return IntentResult(
+                False,
+                MODE_CONTINUE,
+                REASON_CONTENT_REJECTED,
+                FAILURE_CONTENT_REJECTED,
+            )
         except DecisionError as exc:
             logger.warning("[Ambient] 决策模型不可用，跳过本次发言：%s", exc)
-            return IntentResult(False, MODE_CONTINUE, "决策失败")
+            return IntentResult(
+                False,
+                MODE_CONTINUE,
+                f"决策失败：{_brief(exc)}",
+                FAILURE_DECISION,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 决策调用异常，跳过本次发言：%s", exc)
-            return IntentResult(False, MODE_CONTINUE, "决策异常")
+            return IntentResult(
+                False,
+                MODE_CONTINUE,
+                f"决策异常：{_brief(exc)}",
+                FAILURE_DECISION,
+            )
 
         threshold = rule.intent.threshold
         interested = probabilities.get("interested", 0.0)
@@ -356,6 +388,14 @@ def _format_now(now: datetime) -> dict[str, str]:
         "date_time": f"{now:%Y-%m-%d %H:%M:%S}",
         "weekday": WEEKDAY_ZH[now.weekday()],
     }
+
+
+def _brief(exc: BaseException) -> str:
+    """异常原文压成一行：页面那格只放得下短句，完整信息仍进日志。"""
+    text = " ".join(str(exc).split())
+    if len(text) <= REASON_DETAIL_LIMIT:
+        return text
+    return f"{text[: REASON_DETAIL_LIMIT - 1]}…"
 
 
 def _message_entry(

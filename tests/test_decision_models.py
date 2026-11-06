@@ -11,6 +11,7 @@ import pytest
 from astrbot_plugin_ambient_chat.rules.models import DecisionModel, RuleError, Settings
 from astrbot_plugin_ambient_chat.rules.store import RuleStore
 from astrbot_plugin_ambient_chat.speech.decision import (
+    DecisionContentRejected,
     DecisionRouter,
     NoulPrompt,
     probe_decision_model,
@@ -209,3 +210,32 @@ async def test_router_missing_custom_model_fails_closed() -> None:
     router = DecisionRouter(None, RuleStore())  # type: ignore[arg-type]
     with pytest.raises(DecisionError, match="不存在"):
         await router.probabilities("custom:dm_missing", {"q": NoulPrompt("是吗？")})
+
+
+@pytest.mark.asyncio
+async def test_router_marks_content_rejection_apart_from_other_failures(
+    tmp_path,
+) -> None:
+    """内容审核拒绝要单独一类：页面得提示「改内容」，不是「改配置」。"""
+    store = RuleStore(tmp_path)
+    store.update_settings({"decision_models": [MODEL_PAYLOAD]})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"error":{"message":"The request contains sensitive content.",'
+                '"type":"content_check_error","code":"content_check_rejected"}}'
+            ),
+        )
+
+    router = DecisionRouter(
+        None,  # type: ignore[arg-type]
+        store,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(DecisionContentRejected, match="内容审核"):
+            await router.probabilities("custom:dm_test", {"q": NoulPrompt("是吗？")})
+    finally:
+        await router.close()

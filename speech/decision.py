@@ -31,6 +31,7 @@ from .systemone_sdk import (
     State,
     SystemOneClient,
     SystemOneConfig,
+    SystemOneContentRejected,
     choice,
     noul,
     score,
@@ -63,6 +64,14 @@ class NoulPrompt:
     instructions: str
     when_true: str = ""
     when_false: str = ""
+
+
+class DecisionContentRejected(DecisionError):
+    """决策平台因内容审核拒绝了请求。
+
+    请求格式合法，是会话内容被判为敏感；单独一类，好让页面给出「改内容」而不是
+    「改配置」的提示（见 ADR-0033）。
+    """
 
 
 PROBE_STATE = "我本月被重复扣费了，请把多扣的钱退回来。"
@@ -390,6 +399,10 @@ class DecisionRouter:
                 meta=_custom_meta(model, client),
                 error=f"{type(exc).__name__}: {exc}",
             )
+            if isinstance(exc, SystemOneContentRejected):
+                raise DecisionContentRejected(
+                    f"自定义决策模型「{model.name}」内容审核未通过：{exc}"
+                ) from exc
             raise DecisionError(
                 f"自定义决策模型「{model.name}」判定失败：{exc}"
             ) from exc

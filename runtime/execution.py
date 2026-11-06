@@ -308,7 +308,9 @@ class SpeechExecution:
             return SpeechResult("skipped", blocked.reason)
         intent = await plugin.judge.judge(rule, umo, plugin.buffer, now)
         if not intent.speak:
-            return SpeechResult("skipped", intent.reason or "无意向")
+            # 判定失败不是「不想说话」：单独的 state 让页面标红并提示排查方向。
+            state = "decision_failed" if intent.failure else "skipped"
+            return SpeechResult(state, intent.reason or "无意向")
         persona = await plugin.judge.persona_prompt(umo) if rule.inject_persona else ""
         run.phase = "generating"
         speech = await plugin.delivery.prepare(

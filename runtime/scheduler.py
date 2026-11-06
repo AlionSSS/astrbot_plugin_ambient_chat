@@ -476,6 +476,9 @@ class AmbientScheduler:
             return
         unknown = sum(outcome.state == "unknown" for outcome in outcomes)
         history_failed = sum(outcome.state == "history_failed" for outcome in outcomes)
+        decision_failed = sum(
+            outcome.state == "decision_failed" for outcome in outcomes
+        )
         partial = sum(outcome.state == "partial" for outcome in outcomes)
         summary = f"触发 {len(selected)} 个，确认发言 {len(spoken)} 个"
         if partial:
@@ -484,6 +487,8 @@ class AmbientScheduler:
             summary += f"，发送结果未知 {unknown} 个"
         if history_failed:
             summary += f"，历史记录失败 {history_failed} 个"
+        if decision_failed:
+            summary += f"，决策失败 {decision_failed} 个"
         # 绑定摘要只留计数：每个会话的原因由「运行管理」卡片里的目标行逐条展示，
         # 同一批文案再拼进摘要只会让那格又长又难读。
         self._binding_result[binding.id] = summary

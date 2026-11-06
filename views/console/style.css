@@ -1516,6 +1516,13 @@ input[type="password"]::-ms-clear {
   cursor: help;
 }
 
+/* 决策失败要能在扫一眼时和普通「跳过」区分开：用危险色并允许折行显示原因 */
+.target-rows .failed {
+  color: var(--danger);
+  flex: 1 1 240px;
+  word-break: break-word;
+}
+
 /* 每行会话自己的「缓冲区」入口：行内按钮，压缩内边距免得把行撑高 */
 .target-rows .btn {
   flex: none;

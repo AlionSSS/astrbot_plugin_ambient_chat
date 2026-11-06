@@ -10,11 +10,19 @@ import pytest
 from astrbot_plugin_ambient_chat.speech.systemone_sdk import (
     SystemOneClient,
     SystemOneConfig,
+    SystemOneContentRejected,
     SystemOneRequestError,
     SystemOneResponseError,
     noul,
     resolve_endpoint,
 )
+
+CONTENT_REJECTED_BODY = (
+    'data: {"error":{"message":"The request contains sensitive content. '
+    'Please modify your input and try again.","type":"content_check_error",'
+    '"code":"content_check_rejected"}}\n\n'
+)
+"""书生端砚的真实拒绝形态：HTTP 200 + 流式帧包裹的错误信封。"""
 
 
 def _config(**overrides: Any) -> SystemOneConfig:
@@ -215,6 +223,23 @@ async def test_raw_dict_question_with_noul_criteria_is_accepted() -> None:
     }
     assert getattr(answers["q"], "noul") == 0.5
     assert answers["q"].type == "noul"  # 响应里的 type 原样保留
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 400])
+async def test_content_check_rejection_is_not_a_protocol_error(status: int) -> None:
+    """消息格式合法、只是内容被判敏感时，要说「审核未通过」而不是「不是合法 JSON」。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text=CONTENT_REJECTED_BODY)
+
+    async with _client(handler) as client:
+        with pytest.raises(SystemOneContentRejected) as info:
+            await client.ask({"answer": noul("是吗？")})
+
+    assert info.value.code == "content_check_rejected"
+    assert "sensitive content" in info.value.detail
+    assert "内容审核未通过" in str(info.value)
 
 
 @pytest.mark.asyncio
