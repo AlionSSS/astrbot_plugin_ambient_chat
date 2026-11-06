@@ -210,16 +210,49 @@ const CACHE_IMAGES_ADVICE =
   '图片还会随请求一起发送，模型每次调用的 token 消耗会明显增加。' +
   '关闭缓存或插件卸载时会清空已缓存的图片。';
 
-const CACHE_IMAGES_ADVICE_TITLE = '图片缓存建议开启（默认已开启）';
+const CACHE_IMAGES_ADVICE_TITLE = '图片缓存建议开启（默认开启）';
 
 /** 正在等待提示结果：快速切页时不重复弹窗。 */
 let cacheImagesAdvicePending = false;
+
+/** 勾选后正在等待确认：连点复选框时不重复弹窗。 */
+let cacheImagesTogglePending = false;
+
+/** 弹一次「图片缓存的代价」，返回用户是否确认开启。 */
+function confirmCacheImagesAdvice() {
+  return askConfirm(CACHE_IMAGES_ADVICE, CACHE_IMAGES_ADVICE_TITLE, '开启', {
+    primary: true,
+  });
+}
+
+/**
+ * 每次把「是否缓存图片」勾选成开启都弹窗提示代价，确认后才保留勾选。
+ *
+ * 复选框只是前端状态，仍需点「保存」才落盘；关闭弹窗（取消 / Esc）会回退勾选。
+ */
+async function guardCacheImagesToggle() {
+  if (cacheImagesTogglePending) return;
+  const checkbox = $('#setting-cache-images');
+  if (!checkbox?.checked) return;
+  cacheImagesTogglePending = true;
+  try {
+    if (!(await confirmCacheImagesAdvice())) checkbox.checked = false;
+  } finally {
+    cacheImagesTogglePending = false;
+  }
+}
+
+document.addEventListener('change', (event) => {
+  if (event.target.id !== 'setting-cache-images') return;
+  guardCacheImagesToggle();
+});
 
 /**
  * 首次进入设置页时提示一次「建议开启」。
  *
  * 提示状态记在 `settings.json` 的 `settings.cache_images_advice_seen`，跨会话只提示一次；
  * 写入失败时保持未提示，下次进入设置页再弹。已开启只给「知道了」，未开启才提供「开启」。
+ * 这里程序化勾选不会触发 change，因此不会叠加「每次开启」的确认弹窗。
  */
 async function maybeShowCacheImagesAdvice() {
   if (cacheImagesAdvicePending) return;
@@ -230,14 +263,8 @@ async function maybeShowCacheImagesAdvice() {
   try {
     if (checkbox.checked) {
       await askInfo(CACHE_IMAGES_ADVICE, CACHE_IMAGES_ADVICE_TITLE);
-    } else {
-      const confirmed = await askConfirm(
-        CACHE_IMAGES_ADVICE,
-        CACHE_IMAGES_ADVICE_TITLE,
-        '开启',
-        { primary: true },
-      );
-      if (confirmed) checkbox.checked = true;
+    } else if (await confirmCacheImagesAdvice()) {
+      checkbox.checked = true;
     }
     await apiPost('settings/advice_seen');
     if (state.meta?.settings) {

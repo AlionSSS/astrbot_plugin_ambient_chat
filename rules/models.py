@@ -84,7 +84,10 @@ DEFAULT_CACHE_IMAGES = True
 """默认缓存图片：开启后图片按「图片最长边 / 压缩质量」转存，只有多模态模型能用上。"""
 
 DEFAULT_CACHE_IMAGES_ADVICE_SEEN = False
-"""是否已提示过「建议开启图片缓存」：只在 WebUI 首次进入设置页时提示一次。"""
+"""是否已提示过「建议开启图片缓存」：只在 WebUI 首次进入设置页时提示一次。
+
+每次在设置页勾选开启缓存都会另行弹窗确认，不读取该标记。
+"""
 
 MAX_BUFFER_IGNORED_SENDERS = 200
 """上下文缓冲最多忽略多少个发送者 ID。"""
