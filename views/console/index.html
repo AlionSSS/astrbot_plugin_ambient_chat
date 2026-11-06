@@ -146,13 +146,13 @@
                 <div class="step">
                   <h2 class="step-head"><span class="step-no">3</span>发言意向</h2>
                   <p class="hint">
-                    要不要说。通过第 2 步后才判断：直接放行 = 必定发言；决策模型判断 = 先给会话消息打分，达到阈值才发言。
+                    要不要说。通过第 2 步后才判断：按概率放行 = 以设定概率决定是否发言（100% 即必定发言）；决策模型判断 = 先给会话消息打分，达到阈值才发言。
                   </p>
                   <div class="grid">
                     <label class="field">
                       <span>机制</span>
                       <select data-path="intent.mode">
-                        <option value="direct">直接放行</option>
+                        <option value="direct">按概率放行</option>
                         <option value="decision">决策模型判断</option>
                       </select>
                     </label>
@@ -168,6 +168,16 @@
                         min="0"
                         max="1"
                         step="0.05"
+                      />
+                    </label>
+                    <label class="field">
+                      <span>放行概率</span>
+                      <input
+                        data-path="intent.pass_probability"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="5"
                       />
                     </label>
                   </div>

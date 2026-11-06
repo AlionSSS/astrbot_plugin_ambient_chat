@@ -69,6 +69,7 @@ export function blankRule() {
       mode: 'direct',
       decision_provider_id: '',
       threshold: 0.7,
+      pass_probability: 0.5,
     },
     chat_provider_id: '',
     context_turns: 20,
@@ -79,6 +80,9 @@ export function blankRule() {
 export function normalizeRule(rule) {
   rule.context_turns = Number(rule.context_turns) || 20;
   rule.intent.threshold = Number(rule.intent.threshold);
+  // 历史规则没有该字段：缺省按 50% 处理，与后端默认值一致。
+  const probability = Number(rule.intent.pass_probability);
+  rule.intent.pass_probability = Number.isFinite(probability) ? probability : 0.5;
   rule.triggers = (rule.triggers || []).map((trigger) => {
     if (trigger.type === 'window') {
       trigger.count = Number(trigger.count) || 1;

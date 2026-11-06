@@ -52,6 +52,8 @@ from ..speech.segments import (
 
 DEFAULT_CONTEXT_TURNS = 20
 DEFAULT_THRESHOLD = 0.7
+DEFAULT_PASS_PROBABILITY = 0.5
+"""「按概率放行」的默认概率：一半机会发言；填 1.0 即必定发言（旧版「直接放行」）。"""
 DEFAULT_COOLDOWN_MINUTES = 5
 DEFAULT_UNREAD_MIN_COUNT = 10
 DEFAULT_UNANSWERED_COUNT = 3
@@ -537,12 +539,15 @@ class IntentConfig:
     mode: str = INTENT_DIRECT
     decision_provider_id: str = ""
     threshold: float = DEFAULT_THRESHOLD
+    pass_probability: float = DEFAULT_PASS_PROBABILITY
+    """「按概率放行」模式下每次发言的概率，0~1；1.0 即必定发言。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "mode": self.mode,
             "decision_provider_id": self.decision_provider_id,
             "threshold": self.threshold,
+            "pass_probability": self.pass_probability,
         }
 
     @classmethod
@@ -560,10 +565,17 @@ class IntentConfig:
             raise RuleError("判定阈值必须是数字") from exc
         if not 0.0 <= threshold <= 1.0:
             raise RuleError("判定阈值需在 0~1 之间")
+        try:
+            probability = float(raw.get("pass_probability", DEFAULT_PASS_PROBABILITY))
+        except (TypeError, ValueError) as exc:
+            raise RuleError("放行概率必须是数字") from exc
+        if not 0.0 <= probability <= 1.0:
+            raise RuleError("放行概率需在 0~1 之间")
         return cls(
             mode=mode,
             decision_provider_id=str(raw.get("decision_provider_id") or "").strip(),
             threshold=threshold,
+            pass_probability=probability,
         )
 
 

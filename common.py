@@ -43,6 +43,8 @@ BLOCKER_TYPES = (
 )
 
 INTENT_DIRECT = "direct"
+"""按概率放行。键名沿用历史的 ``direct``，已保存的规则无需迁移。"""
+
 INTENT_DECISION = "decision"
 
 POKE_SELF_NAME = "机器人（你）"

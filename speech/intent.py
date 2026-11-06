@@ -1,4 +1,4 @@
-"""发言意向机制：直接放行 / 决策模型判定。
+"""发言意向机制：按概率放行 / 决策模型判定。
 
 判定失败一律 fail-closed（``docs/adr/0005``）。
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -127,7 +128,7 @@ class IntentJudge:
         now: datetime,
     ) -> IntentResult:
         if rule.intent.mode != INTENT_DECISION:
-            return IntentResult(True, MODE_DIRECT, "直接放行")
+            return self._by_probability(rule.intent.pass_probability)
 
         target = parse_target(umo)
         messages = buffer.recent(umo, rule.context_turns)
@@ -214,6 +215,16 @@ class IntentJudge:
         if new_topic >= threshold:
             return IntentResult(True, MODE_NEW_TOPIC, f"新话题（{scores}）")
         return IntentResult(False, MODE_CONTINUE, f"不感兴趣（{scores}）")
+
+    @staticmethod
+    def _by_probability(probability: float) -> IntentResult:
+        """按概率决定是否放行：``1.0`` 时等价于旧版「直接放行」，不做随机。"""
+        if probability >= 1.0:
+            return IntentResult(True, MODE_DIRECT, "直接放行")
+        percent = f"{probability * 100:.0f}%"
+        if probability > 0.0 and random.random() < probability:
+            return IntentResult(True, MODE_DIRECT, f"按概率放行（{percent}）")
+        return IntentResult(False, MODE_CONTINUE, f"按概率未放行（{percent}）")
 
     async def _scene(
         self,

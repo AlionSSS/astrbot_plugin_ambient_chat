@@ -128,7 +128,7 @@ function renderRuleModal() {
   for (const input of document.querySelectorAll('#rule-editor [data-path]')) {
     const value = getPath(rule, input.dataset.path);
     if (input.type === 'checkbox') input.checked = Boolean(value);
-    else input.value = value ?? '';
+    else input.value = fieldToInput(input.dataset.path, value);
   }
 
   // 注入条数受「上下文缓冲」容量约束，超出部分取不到，这里把当前上限写明。
@@ -158,19 +158,28 @@ function syncIntentFields() {
   const modeInput = document.querySelector('#rule-editor [data-path="intent.mode"]');
   if (!modeInput) return;
   const decisionMode = modeInput.value === 'decision';
-  // 「直接放行」下决策模型与阈值不参与判断，禁用输入以表达这一点。
-  for (const path of ['intent.decision_provider_id', 'intent.threshold']) {
+  // 两种机制各自只用一部分字段：用不到的整块隐藏，只留下当前机制要填的项。
+  const activePaths = decisionMode
+    ? ['intent.decision_provider_id', 'intent.threshold']
+    : ['intent.pass_probability'];
+  for (const path of [
+    'intent.decision_provider_id',
+    'intent.threshold',
+    'intent.pass_probability',
+  ]) {
     const input = document.querySelector(`#rule-editor [data-path="${path}"]`);
     if (!input) continue;
-    input.disabled = !decisionMode;
-    input.closest('.field')?.classList.toggle('is-disabled', !decisionMode);
+    const active = activePaths.includes(path);
+    input.disabled = !active;
+    input.closest('.field')?.classList.toggle('hidden', !active);
   }
   const hint = $('#intent-hint');
   if (hint) {
     hint.textContent = decisionMode
       ? '决策模型会先给当前会话的消息打分，达到阈值视为对会话内容感兴趣或想发起新话题，才会发言。' +
         '下拉里带「（自定义）」的项来自「更多设置」的决策模型配置。'
-      : '当前为直接放行：只要通过第 2 步「拦截」就一定发言，决策模型不参与判断。';
+      : '当前为按概率放行：只要通过第 2 步「拦截」，就按设定概率决定是否发言；' +
+        '放行概率填 100 等于每次都发言，填 0 等于从不发言，决策模型不参与判断。';
   }
 }
 
@@ -422,6 +431,25 @@ async function deleteRuleRow(ruleId) {
 }
 
 /* -------------------------------------------------------- 规则编辑弹窗的输入 */
+/** 以百分比展示的字段：模型里存 0~1，输入框里填 0~100。 */
+const PERCENT_FIELDS = new Set(['intent.pass_probability']);
+
+/** 模型值 → 输入框显示值。 */
+function fieldToInput(path, value) {
+  if (!PERCENT_FIELDS.has(path)) return value ?? '';
+  const ratio = Number(value);
+  return String(Number.isFinite(ratio) ? Math.round(ratio * 100) : 50);
+}
+
+/** 输入框显示值 → 模型值：清空或非法时回落到默认 50%。 */
+function inputToField(path, raw) {
+  if (!PERCENT_FIELDS.has(path)) return raw;
+  if (raw === '') return 0.5;
+  const percent = Number(raw);
+  if (!Number.isFinite(percent)) return 0.5;
+  return Math.min(100, Math.max(0, percent)) / 100;
+}
+
 /** 手改规则表单：把输入写回 `state.editingRule`，只标记脏、不整块重绘。 */
 function handleEditorInput(target) {
   if (!state.editingRule) return;
@@ -430,6 +458,7 @@ function handleEditorInput(target) {
   if (target.dataset.path && !target.dataset.triggerType) {
     let value = target.value;
     if (target.type === 'checkbox') value = target.checked;
+    else value = inputToField(target.dataset.path, value);
     setPath(state.editingRule, target.dataset.path, value);
     state.ruleDirty = true;
     if (target.dataset.path === 'intent.mode') syncIntentFields();

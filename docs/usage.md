@@ -92,9 +92,12 @@
 
 | 字段 | 说明 |
 | --- | --- |
-| `mode` | `direct`（直接放行）或 `decision`（决策模型判定） |
+| `mode` | `direct`（按概率放行）或 `decision`（决策模型判定） |
+| `pass_probability` | 放行概率，0~1，默认 `0.5`（页面上按百分比填写）；仅 `direct` 生效，`1` 即每次都发言，等价于旧版「直接放行」 |
 | `decision_provider_id` | 决策模型引用：官方提供商 id，或「更多设置」里的 `custom:<id>`；留空回退到默认提供商 |
 | `threshold` | 判定阈值，0~1，默认 `0.7`；「是否感兴趣」与「是否想开新话题」共用 |
+
+`direct` 按概率放行：通过第 2 步「拦截」后，每次发言按 `pass_probability` 掷一次随机数，命中才发言，结果记为 `按概率放行（68%）` / `按概率未放行（68%）`；概率为 `1` 时不掷随机数，直接记为 `直接放行`。规则里没有该字段时按默认 `0.5` 处理，页面上也只展示当前机制用得到的配置（`direct` 只看「放行概率」，`decision` 只看决策模型与判定阈值）。
 
 判定顺序：感兴趣 → 接话；否则想开新话题 → 发起新话题；两者皆否则放弃。两个判定值都会写进「运行管理」里该会话的结果（如 `感兴趣（感兴趣 0.53 / 新话题 0.21）`）。**决策失败一律放弃**（fail-closed），只记 WARNING。
 
@@ -216,7 +219,8 @@
       "intent": {
         "mode": "decision",
         "decision_provider_id": "custom:judge",
-        "threshold": 0.7
+        "threshold": 0.7,
+        "pass_probability": 0.5
       },
       "chat_provider_id": "",
       "context_turns": 20,
