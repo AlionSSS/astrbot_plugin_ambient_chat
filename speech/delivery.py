@@ -37,6 +37,9 @@ if TYPE_CHECKING:
 MAX_IMAGES = 8
 """单次请求最多附带的缓冲图片数，按时间取最近的若干张。"""
 
+MAX_AUDIOS = 2
+"""单次请求最多附带的缓冲语音数：语音信息密度低，太多只是白烧 token。"""
+
 
 @dataclass(frozen=True, slots=True)
 class PreparedSpeech:
@@ -95,6 +98,13 @@ class Delivery:
     # ------------------------------------------------------------------ 生成
     def _allows_images(self, provider_id: str) -> bool:
         """仅在供应商明确未启用图片能力时跳过图片；每次读取以跟随配置变更。"""
+        return self._supports_modality(provider_id, "image")
+
+    def _allows_audio(self, provider_id: str) -> bool:
+        """音频能力同理：只有明确不含 ``audio`` 时才跳过，避免白带音频报错。"""
+        return self._supports_modality(provider_id, "audio")
+
+    def _supports_modality(self, provider_id: str, modality: str) -> bool:
         try:
             provider = self._context.get_provider_by_id(provider_id)
             modalities = provider.provider_config.get("modalities")
@@ -102,7 +112,7 @@ class Delivery:
             return True
         # 与核心迁移语义一致：空列表不是明确的能力限制。
         return (
-            not isinstance(modalities, list) or not modalities or "image" in modalities
+            not isinstance(modalities, list) or not modalities or modality in modalities
         )
 
     async def _generate(
@@ -111,6 +121,7 @@ class Delivery:
         prompt: str,
         system_prompt: str,
         image_urls: list[str],
+        audio_urls: list[str] | None = None,
     ) -> Any:
         """单独请求一次对话模型；失败返回 None，由调用方决定是否重试。
 
@@ -124,6 +135,7 @@ class Delivery:
                 prompt=prompt,
                 system_prompt=system_prompt or None,
                 image_urls=image_urls or None,
+                audio_urls=audio_urls or None,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 生成失败：%s", exc)
@@ -174,18 +186,32 @@ class Delivery:
             messages,
             limit=MAX_IMAGES if self._allows_images(provider_id) else 0,
         ) as image_urls:
-            response = await self._generate(
-                provider_id, prompt, persona_prompt, image_urls
-            )
-            had_images = bool(image_urls)
-        if response is None and had_images:
-            # 本次去图重试，但网络、额度等临时错误不能作为模型不支持图片的证据。
+            with self._buffer.borrow_audio(
+                messages,
+                limit=MAX_AUDIOS if self._allows_audio(provider_id) else 0,
+            ) as audio_urls:
+                response = await self._generate(
+                    provider_id, prompt, persona_prompt, image_urls, audio_urls
+                )
+            if response is None and audio_urls:
+                # 逐级退让：先只丢语音（音频支持最不稳定），图片往往还能用。
+                # 语音借用已退出，这次不再持有音频文件。
+                logger.warning(
+                    "[Ambient] 带语音生成失败，去掉语音重试（%s，%d 张图）",
+                    umo,
+                    len(image_urls),
+                )
+                response = await self._generate(
+                    provider_id, prompt, persona_prompt, image_urls, []
+                )
+        if response is None and image_urls:
+            # 网络、额度等临时错误不能作为模型不支持媒体的证据，只影响本次。
             logger.warning(
                 "[Ambient] 带图生成失败，改为纯文本重试（%s，%d 张图）",
                 umo,
                 len(image_urls),
             )
-            response = await self._generate(provider_id, prompt, persona_prompt, [])
+            response = await self._generate(provider_id, prompt, persona_prompt, [], [])
         if response is None:
             return None
 

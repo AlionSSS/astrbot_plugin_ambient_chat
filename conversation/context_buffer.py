@@ -3,8 +3,9 @@
 决策模型与对话模型都以它作为「最近 N 条消息」的来源，
 见 ``docs/adr/0004`` 与 ``CONTEXT.md`` 中的「上下文缓冲」「启动预热」。
 
-图片不放在内存里：消息只带本地文件路径，字节落在插件数据目录，
-消息被淘汰时释放图片；生成中借用的文件延迟到请求结束回收（ADR-0030）。
+图片与语音不放在内存里：消息只带本地文件路径，字节落在插件数据目录，
+消息被淘汰时释放媒体；生成中借用的文件延迟到请求结束回收（ADR-0030）。
+语音缓存默认关闭，条数不单独设限——跟着缓冲条数一起进退（ADR-0031）。
 """
 
 from __future__ import annotations
@@ -74,8 +75,10 @@ class ContextBuffer:
         """「更多设置」里过滤的发送者 ID：其消息既不进缓冲，也不参与预热。"""
         self._media = media or MediaStore()
         self._media_enabled = False
+        self._audio_enabled = False
         self._media_tasks: set[asyncio.Task] = set()
         self._captures: dict[int, asyncio.Task] = {}
+        self._audio_captures: dict[int, asyncio.Task] = {}
         self._pins: Counter[str] = Counter()
         self._retired: set[str] = set()
         self._pins_idle = asyncio.Event()
@@ -87,12 +90,25 @@ class ContextBuffer:
     def media_root(self) -> Path:
         return self._media.root
 
-    def configure_media(self, *, enabled: bool, max_edge: int, quality: int) -> None:
-        """关闭时使所有旧转存失效；重新打开不复活旧消息的图片任务。"""
+    def configure_media(
+        self,
+        *,
+        enabled: bool,
+        max_edge: int,
+        quality: int,
+        audio_enabled: bool = False,
+    ) -> None:
+        """关闭时使对应媒体的旧转存失效；重新打开不复活旧消息的转存任务。
+
+        图片与语音各有一个开关：关掉哪一个就只清哪一类，互不牵连。
+        """
         self._media.configure(max_edge=max_edge, quality=quality)
         self._media_enabled = enabled and not self._closed
+        self._audio_enabled = audio_enabled and not self._closed
         if not self._media_enabled:
-            self.clear_media()
+            self._clear_images()
+        if not self._audio_enabled:
+            self._clear_audio()
 
     @property
     def ignored_senders(self) -> frozenset[str]:
@@ -174,6 +190,7 @@ class ContextBuffer:
         message: ChatMessage,
         *,
         image_components: Sequence[Any] = (),
+        audio_components: Sequence[Any] = (),
     ) -> None:
         if self._closed or self._is_ignored(message):
             return
@@ -195,6 +212,13 @@ class ContextBuffer:
                 self._capture_media(umo, message, tuple(image_components))
             )
             self._captures[id(message)] = task
+            self._media_tasks.add(task)
+            task.add_done_callback(self._media_tasks.discard)
+        if audio_components and self._audio_enabled and not message.is_bot:
+            task = asyncio.create_task(
+                self._capture_audio(umo, message, tuple(audio_components))
+            )
+            self._audio_captures[id(message)] = task
             self._media_tasks.add(task)
             task.add_done_callback(self._media_tasks.discard)
 
@@ -222,12 +246,42 @@ class ContextBuffer:
             if self._captures.get(id(message)) is task:
                 self._captures.pop(id(message))
 
+    async def _capture_audio(
+        self, umo: str, message: ChatMessage, components: Sequence[Any]
+    ) -> None:
+        captured: list[tuple[str, int]] = []
+        task = asyncio.current_task()
+        try:
+            captured = await self._media.capture_audio(umo, components)
+            if (
+                self._audio_captures.get(id(message)) is not task
+                or not self._audio_enabled
+                or not self._contains(umo, message)
+            ):
+                return
+            message.audio = tuple(path for path, _ in captured)
+            message.audio_bytes = sum(size for _, size in captured)
+            captured = []  # 所有权已经交给消息，淘汰和配额负责释放。
+            self._trim_media(self._buffers[umo])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Ambient] 语音缓存失败（%s）：%s", umo, exc)
+        finally:
+            self._media.discard(path for path, _ in captured)
+            if self._audio_captures.get(id(message)) is task:
+                self._audio_captures.pop(id(message))
+
     def _cancel_capture(self, message: ChatMessage) -> None:
         task = self._captures.pop(id(message), None)
         if task is not None and not task.cancelling():
             task.cancel()
 
-    def _release_images(self, paths: Sequence[str]) -> None:
+    def _cancel_audio_capture(self, message: ChatMessage) -> None:
+        task = self._audio_captures.pop(id(message), None)
+        if task is not None and not task.cancelling():
+            task.cancel()
+
+    def _release_media(self, paths: Sequence[str]) -> None:
+        """删除媒体文件；正在被生成借用的先记下，等请求退出再删。"""
         for path in paths:
             if self._pins[path]:
                 self._retired.add(path)
@@ -235,15 +289,8 @@ class ContextBuffer:
                 self._media.discard([path])
 
     @contextmanager
-    def borrow_images(
-        self, messages: Sequence[ChatMessage], *, limit: int
-    ) -> Iterator[list[str]]:
-        """快照最近图片并借用至请求退出；淘汰不删除借用中的文件。"""
-        paths = (
-            [path for message in messages for path in message.images][-limit:]
-            if self._media_enabled and limit > 0
-            else []
-        )
+    def _borrow(self, paths: list[str]) -> Iterator[list[str]]:
+        """借用一批媒体路径至请求退出；淘汰不删除借用中的文件。"""
         self._pins.update(paths)
         if paths:
             self._pins_idle.clear()
@@ -260,28 +307,73 @@ class ContextBuffer:
             if not self._pins:
                 self._pins_idle.set()
 
+    @contextmanager
+    def borrow_images(
+        self, messages: Sequence[ChatMessage], *, limit: int
+    ) -> Iterator[list[str]]:
+        """快照最近图片并借用至请求退出；淘汰不删除借用中的文件。"""
+        paths = (
+            [path for message in messages for path in message.images][-limit:]
+            if self._media_enabled and limit > 0
+            else []
+        )
+        with self._borrow(paths) as borrowed:
+            yield borrowed
+
+    @contextmanager
+    def borrow_audio(
+        self, messages: Sequence[ChatMessage], *, limit: int
+    ) -> Iterator[list[str]]:
+        """快照最近语音并借用至请求退出；条数由调用方按模型能力决定。"""
+        paths = (
+            [path for message in messages for path in message.audio][-limit:]
+            if self._audio_enabled and limit > 0
+            else []
+        )
+        with self._borrow(paths) as borrowed:
+            yield borrowed
+
     def _push(self, buffer: deque[ChatMessage], message: ChatMessage) -> None:
-        """写入缓冲，被挤出的消息连同磁盘图片一起清掉。"""
+        """写入缓冲，被挤出的消息连同磁盘媒体一起清掉。"""
         while len(buffer) >= self._maxlen:
             self._discard(buffer.popleft())
         buffer.append(message)
 
     def _discard(self, message: ChatMessage) -> None:
         self._cancel_capture(message)
-        self._release_images(message.images)
+        self._cancel_audio_capture(message)
+        self._release_media(message.images)
         message.images = ()
         message.image_bytes = 0
+        self._release_media(message.audio)
+        message.audio = ()
+        message.audio_bytes = 0
 
     def _trim_media(self, buffer: deque[ChatMessage]) -> None:
-        """把该会话的图片占用压到上限内，从最旧的图片开始删。"""
-        total = sum(message.image_bytes for message in buffer)
+        """把该会话的媒体占用压到上限内：先删最旧的语音，再删最旧的图片。
+
+        语音体积远小于图片，通常不会触发配额；放在前面只是保证超限时
+        先牺牲最不占带宽价值的那类。条数本身不设上限——消息被挤出缓冲时
+        媒体随 ``_discard`` 一起释放。
+        """
+        total = sum(message.image_bytes + message.audio_bytes for message in buffer)
         if total <= MAX_MEDIA_BYTES_PER_SESSION:
             return
+        for message in buffer:
+            while message.audio and total > MAX_MEDIA_BYTES_PER_SESSION:
+                path = message.audio[0]
+                size = _file_size(path)
+                self._release_media([path])
+                message.audio = message.audio[1:]
+                message.audio_bytes = max(0, message.audio_bytes - size)
+                total -= size
+            if total <= MAX_MEDIA_BYTES_PER_SESSION:
+                return
         for message in buffer:
             while message.images and total > MAX_MEDIA_BYTES_PER_SESSION:
                 path = message.images[0]
                 size = _file_size(path)
-                self._release_images([path])
+                self._release_media([path])
                 message.images = message.images[1:]
                 message.image_bytes = max(0, message.image_bytes - size)
                 total -= size
@@ -289,7 +381,7 @@ class ContextBuffer:
                 return
 
     def _contains(self, umo: str, message: ChatMessage) -> bool:
-        """判断某条消息是否仍在缓冲里（后台转存图片完成时用）。"""
+        """判断某条消息是否仍在缓冲里（后台转存媒体完成时用）。"""
         buffer = self._buffers.get(umo)
         return buffer is not None and any(item is message for item in buffer)
 
@@ -350,25 +442,41 @@ class ContextBuffer:
             self._discard(message)
 
     def clear_all(self) -> None:
-        """清空所有会话的缓冲（含磁盘图片）：全局开关关闭、重新开启前调用。"""
+        """清空所有会话的缓冲（含磁盘媒体）：全局开关关闭、重新开启前调用。"""
         for umo in list(self._buffers):
             self.clear(umo)
 
     def clear_media(self) -> None:
-        """撤销转存并释放全部图片；借用中的文件请求结束后删除。"""
+        """撤销转存并释放全部图片与语音；借用中的文件请求结束后删除。"""
+        self._clear_images()
+        self._clear_audio()
+
+    def _clear_images(self) -> None:
         for buffer in self._buffers.values():
             for message in buffer:
-                self._discard(message)
+                self._cancel_capture(message)
+                self._release_media(message.images)
+                message.images = ()
+                message.image_bytes = 0
+
+    def _clear_audio(self) -> None:
+        for buffer in self._buffers.values():
+            for message in buffer:
+                self._cancel_audio_capture(message)
+                self._release_media(message.audio)
+                message.audio = ()
+                message.audio_bytes = 0
 
     def reset_media(self) -> None:
-        """仅在初始化、尚未接入消息前清空上次进程遗留的图片。"""
+        """仅在初始化、尚未接入消息前清空上次进程遗留的媒体。"""
         self._media.purge_all()
 
     async def close(self) -> None:
-        """禁止新任务，等待实际写盘与借用结束，最后清空整个图片目录。"""
+        """禁止新任务，等待实际写盘与借用结束，最后清空整个媒体目录。"""
         if self._close_task is None:
             self._closed = True
             self._media_enabled = False
+            self._audio_enabled = False
             self.clear_all()
             self._close_task = asyncio.create_task(self._close_media())
         await asyncio.shield(self._close_task)

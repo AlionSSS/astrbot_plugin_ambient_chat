@@ -15,6 +15,7 @@ export function renderSettings() {
     settings.buffer_ignored_sender_ids || []
   ).join(', ');
   $('#setting-cache-images').checked = Boolean(settings.cache_images);
+  $('#setting-cache-audio').checked = Boolean(settings.cache_audio);
   $('#setting-image-edge').value = settings.image_max_edge;
   $('#setting-image-quality').value = settings.image_quality;
   $('#setting-decision-debug').checked = Boolean(settings.decision_debug_enabled);
@@ -185,6 +186,7 @@ async function saveSettings() {
         $('#setting-ignored-senders').value,
       ),
       cache_images: $('#setting-cache-images').checked,
+      cache_audio: $('#setting-cache-audio').checked,
       image_max_edge: Number($('#setting-image-edge').value),
       image_quality: Number($('#setting-image-quality').value),
       decision_debug_enabled: $('#setting-decision-debug').checked,
@@ -205,6 +207,8 @@ async function saveSettings() {
 
 const CACHE_IMAGES_ADVICE =
   '建议开启图片缓存：开启后，支持多模态的对话模型能看到最近对话里的图片。' +
+  '只有支持图片输入的对话模型（供应商 modalities 含 image）才会真正收到图片；' +
+  '其他模型只会在提示词里看到 [图片] 占位。' +
   '代价是图片会转存到插件数据目录并持续占用磁盘空间，消息被挤出缓冲时才会删除；' +
   '落盘时会按「图片最长边」「图片压缩质量」重编码，画质会有损失；' +
   '图片还会随请求一起发送，模型每次调用的 token 消耗会明显增加。' +
@@ -212,11 +216,22 @@ const CACHE_IMAGES_ADVICE =
 
 const CACHE_IMAGES_ADVICE_TITLE = '图片缓存建议开启（默认开启）';
 
+const CACHE_AUDIO_ADVICE =
+  '开启语音缓存后，最近对话里的语音会转存到插件数据目录，生成时随请求一起发送。' +
+  '只有支持音频输入的对话模型（供应商 modalities 含 audio）才会真正收到语音；' +
+  '其他模型只会在提示词里看到 [语音] 占位。' +
+  '代价是语音会持续占用磁盘空间，消息被挤出缓冲时才会删除；' +
+  '语音还会随请求一起发送，模型每次调用的 token 消耗会增加。' +
+  '关闭缓存或插件卸载时会清空已缓存的语音。';
+
+const CACHE_AUDIO_ADVICE_TITLE = '开启语音缓存（默认关闭）';
+
 /** 正在等待提示结果：快速切页时不重复弹窗。 */
 let cacheImagesAdvicePending = false;
 
 /** 勾选后正在等待确认：连点复选框时不重复弹窗。 */
 let cacheImagesTogglePending = false;
+let cacheAudioTogglePending = false;
 
 /** 弹一次「图片缓存的代价」，返回用户是否确认开启。 */
 function confirmCacheImagesAdvice() {
@@ -225,8 +240,15 @@ function confirmCacheImagesAdvice() {
   });
 }
 
+/** 弹一次「语音缓存的代价」，返回用户是否确认开启。 */
+function confirmCacheAudioAdvice() {
+  return askConfirm(CACHE_AUDIO_ADVICE, CACHE_AUDIO_ADVICE_TITLE, '开启', {
+    primary: true,
+  });
+}
+
 /**
- * 每次把「是否缓存图片」勾选成开启都弹窗提示代价，确认后才保留勾选。
+ * 每次把「是否缓存图片」勾选成开启都弹窗提示代价与模型要求，确认后才保留勾选。
  *
  * 复选框只是前端状态，仍需点「保存」才落盘；关闭弹窗（取消 / Esc）会回退勾选。
  */
@@ -242,9 +264,22 @@ async function guardCacheImagesToggle() {
   }
 }
 
+/** 语音同理：开启前说明需要对话模型支持音频输入，取消则回退勾选。 */
+async function guardCacheAudioToggle() {
+  if (cacheAudioTogglePending) return;
+  const checkbox = $('#setting-cache-audio');
+  if (!checkbox?.checked) return;
+  cacheAudioTogglePending = true;
+  try {
+    if (!(await confirmCacheAudioAdvice())) checkbox.checked = false;
+  } finally {
+    cacheAudioTogglePending = false;
+  }
+}
+
 document.addEventListener('change', (event) => {
-  if (event.target.id !== 'setting-cache-images') return;
-  guardCacheImagesToggle();
+  if (event.target.id === 'setting-cache-images') guardCacheImagesToggle();
+  else if (event.target.id === 'setting-cache-audio') guardCacheAudioToggle();
 });
 
 /**

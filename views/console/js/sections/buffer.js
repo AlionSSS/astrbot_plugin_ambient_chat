@@ -53,7 +53,7 @@ function formatBytes(bytes) {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-/** 条数与图片占用：截断时说明只显示最近 N 条。 */
+/** 条数与媒体占用：截断时说明只显示最近 N 条。 */
 function bufferStatsText(session, previewLimit) {
   const count = session.truncated
     ? `共 ${session.count} 条 · 仅显示最近 ${Math.min(previewLimit, session.count)} 条`
@@ -61,7 +61,10 @@ function bufferStatsText(session, previewLimit) {
   const media = session.media_count
     ? ` · 图片 ${session.media_count} 张 · ${formatBytes(session.media_bytes)}`
     : '';
-  return `${count}${media}`;
+  const audio = session.audio_count
+    ? ` · 语音 ${session.audio_count} 段 · ${formatBytes(session.audio_bytes)}`
+    : '';
+  return `${count}${media}${audio}`;
 }
 
 /** 消息列表：时间 / 发送者名字 / 发送者 ID / 正文四列对齐，按时间正序，最新在底部。 */

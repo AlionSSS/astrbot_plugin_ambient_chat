@@ -1,11 +1,12 @@
-"""会话图片的磁盘缓存。
+"""会话图片与语音的磁盘缓存。
 
-上下文缓冲只在内存里保存文件路径，图片字节写到
+上下文缓冲只在内存里保存文件路径，媒体字节写到
 ``data/plugin_data/astrbot_plugin_ambient_chat/media/<会话摘要>/`` 下，
 文件由上下文缓冲持有；生成中的借用与卸载收尾见 ``docs/adr/0030``。
 
-落盘时会按「最长边 + JPEG 质量」重编码以压掉体积（允许损失画质），
-见 ``docs/adr/0010``；小图或压缩反变更大时保留原文件。
+图片落盘时会按「最长边 + JPEG 质量」重编码以压掉体积（允许损失画质），
+见 ``docs/adr/0010``；小图或压缩反变更大时保留原文件。语音原样复制，
+转码交给核心在发请求时处理（``docs/adr/0031``）。
 """
 
 from __future__ import annotations
@@ -35,6 +36,15 @@ MEDIA_DIRNAME = "media"
 
 MAX_IMAGES_PER_MESSAGE = 4
 """单条消息最多缓存几张图片，避免图片墙把磁盘写满。"""
+
+MAX_AUDIOS_PER_MESSAGE = 2
+"""单条消息最多缓存几段语音：QQ 语音基本一条一个，留一点余量。"""
+
+MAX_AUDIO_SOURCE_BYTES = 16 * 1024 * 1024
+"""单段语音体积上限，超过直接丢弃：语音消息通常只有几十 KiB。"""
+
+AUDIO_CAPTURE_TIMEOUT_SECONDS = 20.0
+"""单段语音「取回本地」的超时。"""
 
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 """源图体积上限，超过直接丢弃：再大的图解码会吃掉大量内存。"""
@@ -97,7 +107,7 @@ _SUFFIXES_BY_FORMAT: dict[str, tuple[str, ...]] = {
 
 
 class MediaStore:
-    """把消息里的图片转存到插件数据目录，返回本地绝对路径与字节数。"""
+    """把消息里的图片、语音转存到插件数据目录，返回本地绝对路径与字节数。"""
 
     def __init__(
         self,
@@ -152,6 +162,67 @@ class MediaStore:
             self.discard(path for path, _ in saved)
             raise
         return saved
+
+    async def capture_audio(
+        self,
+        umo: str,
+        components: Sequence[Any],
+    ) -> list[tuple[str, int]]:
+        """转存一条消息里的语音，返回 ``(路径, 字节数)``，失败的直接跳过。
+
+        语音原样复制，不做重编码：silk/amr 等格式由核心在发请求时转成 wav，
+        插件只负责「消息淘汰时能删掉」。转码放进插件会让依赖变重，收益也小。
+        """
+        saved: list[tuple[str, int]] = []
+        try:
+            for component in list(components)[:MAX_AUDIOS_PER_MESSAGE]:
+                item = await self._capture_audio_one(umo, component)
+                if item is not None:
+                    saved.append(item)
+        except BaseException:
+            self.discard(path for path, _ in saved)
+            raise
+        return saved
+
+    async def _capture_audio_one(
+        self, umo: str, component: Any
+    ) -> tuple[str, int] | None:
+        try:
+            source = await _resolve_with_timeout(
+                component, AUDIO_CAPTURE_TIMEOUT_SECONDS
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[Ambient] 语音取回失败，跳过：%s", exc)
+            return None
+        if not source:
+            return None
+
+        source_path = Path(source)
+        try:
+            size = source_path.stat().st_size
+        except OSError:
+            return None
+        if size <= 0 or size > MAX_AUDIO_SOURCE_BYTES:
+            logger.debug(
+                "[Ambient] 语音过大或为空（%d 字节），跳过：%s", size, source_path.name
+            )
+            return None
+
+        target = self.root / _session_key(umo)
+        stem = f"audio_{time.time_ns()}_{uuid.uuid4().hex[:8]}"
+        suffix = source_path.suffix.lower() or ".audio"
+        destination = target / f"{stem}{suffix}"
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(shutil.copyfile, source_path, destination)
+        except OSError as exc:
+            logger.warning("[Ambient] 语音落盘失败，本次不缓存：%s", exc)
+            return None
+        try:
+            written = destination.stat().st_size
+        except OSError:
+            written = size
+        return str(destination), written
 
     async def _capture_one(self, umo: str, component: Any) -> tuple[str, int] | None:
         download = asyncio.create_task(_resolve_source(component))
@@ -245,20 +316,20 @@ class MediaStore:
             await asyncio.gather(*self._writes)
 
     def discard(self, paths: Iterable[str]) -> None:
-        """删除已不再被缓冲引用的图片。"""
+        """删除已不再被缓冲引用的图片或语音。"""
         for path in paths:
             try:
                 Path(path).unlink(missing_ok=True)
             except OSError as exc:
-                logger.debug("[Ambient] 删除图片缓存失败（%s）：%s", path, exc)
+                logger.debug("[Ambient] 删除媒体缓存失败（%s）：%s", path, exc)
 
     def purge_all(self) -> None:
-        """清空整个图片缓存目录（缓冲只在内存，重启后没有任何引用）。"""
+        """清空整个媒体缓存目录（缓冲只在内存，重启后没有任何引用）。"""
         root = self.root
         if not root.exists():
             return
         shutil.rmtree(root, ignore_errors=True)
-        logger.info("[Ambient] 已清理图片缓存目录：%s", root)
+        logger.info("[Ambient] 已清理媒体缓存目录：%s", root)
 
 
 def _store_image(
@@ -457,7 +528,7 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 
 async def _resolve_source(component: Any) -> str:
-    """把消息组件解析为本地文件路径；网络图片会先下载到核心临时目录。"""
+    """把消息组件解析为本地文件路径；网络媒体会先下载到核心临时目录。"""
     local = getattr(component, "path", None)
     if local and Path(local).is_file():
         return str(local)
@@ -465,6 +536,20 @@ async def _resolve_source(component: Any) -> str:
     if convert is None:
         raise ValueError("消息组件不支持转换为本地文件")
     return await convert()
+
+
+async def _resolve_with_timeout(component: Any, timeout: float) -> str:
+    """解析本地路径但最多等 ``timeout`` 秒：外部下载可能无视取消。"""
+    download = asyncio.create_task(_resolve_source(component))
+    download.add_done_callback(_observe_download)
+    try:
+        done, _ = await asyncio.wait({download}, timeout=timeout)
+        if not done:
+            raise TimeoutError("媒体取回超时")
+        return download.result()
+    finally:
+        if not download.done():
+            download.cancel()
 
 
 def _observe_download(task: asyncio.Task) -> None:

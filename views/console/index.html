@@ -291,10 +291,10 @@
           <div class="panel">
             <h2>上下文缓冲</h2>
             <p class="hint">
-              决定每个会话记住多少近期消息、要过滤掉谁的消息，以及是否把图片也缓存下来。
+              决定每个会话记住多少近期消息、要过滤掉谁的消息，以及是否把图片与语音也缓存下来。
               <span class="section-help pop-anchor-right">
                 <button class="help-icon" type="button" aria-label="关于上下文缓冲" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
-                <span class="help-pop" role="note">文本仅存内存，重启后清空。<br />缓冲条数不建议过多，只要保证能覆盖「注入最近对话条数」需要的量即可。<br />「过滤的用户 ID」里的用户消息不再进入缓冲，机器人发言不再考虑这些用户的消息。机器人自己的发言不受影响。<br />图片落盘时按「最长边」等比缩小、以「压缩质量」重编码（会损失画质）以节省磁盘；小图与压缩后反而更大的图保留原样。</span>
+                <span class="help-pop" role="note">文本仅存内存，重启后清空。<br />缓冲条数不建议过多，只要保证能覆盖「注入最近对话条数」需要的量即可。<br />「过滤的用户 ID」里的用户消息不再进入缓冲，机器人发言不再考虑这些用户的消息。机器人自己的发言不受影响。<br />图片落盘时按「最长边」等比缩小、以「压缩质量」重编码（会损失画质）以节省磁盘；小图与压缩后反而更大的图保留原样。<br />语音原样转存，默认关闭；条数跟着缓冲条数走，随消息淘汰删除，只有支持音频输入的模型能用上。</span>
               </span>
             </p>
             <div class="grid">
@@ -317,6 +317,10 @@
               <label class="field">
                 <span>缓存图片压缩质量（40~95）</span>
                 <input id="setting-image-quality" type="number" min="40" max="95" step="5" />
+              </label>
+              <label class="field inline">
+                <span>是否缓存语音</span>
+                <input id="setting-cache-audio" type="checkbox" />
               </label>
             </div>
           </div>

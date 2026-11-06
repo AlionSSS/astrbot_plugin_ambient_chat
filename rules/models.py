@@ -83,6 +83,9 @@ DEFAULT_BUFFER_SIZE = 100
 DEFAULT_CACHE_IMAGES = True
 """默认缓存图片：开启后图片按「图片最长边 / 压缩质量」转存，只有多模态模型能用上。"""
 
+DEFAULT_CACHE_AUDIO = False
+"""默认不缓存语音：音频体积不小，且只有支持音频输入的模型能用上（ADR-0031）。"""
+
 DEFAULT_CACHE_IMAGES_ADVICE_SEEN = False
 """是否已提示过「建议开启图片缓存」：只在 WebUI 首次进入设置页时提示一次。
 
@@ -179,6 +182,8 @@ class Settings:
     send_interval_seconds: float = DEFAULT_SEND_INTERVAL_SECONDS
     buffer_size: int = DEFAULT_BUFFER_SIZE
     cache_images: bool = DEFAULT_CACHE_IMAGES
+    cache_audio: bool = DEFAULT_CACHE_AUDIO
+    """是否缓存语音：开启后语音原样转存，条数跟着缓冲条数走，随消息淘汰删除。"""
     image_max_edge: int = DEFAULT_IMAGE_MAX_EDGE
     """图片落盘时的最长边（像素），超出则等比缩小。"""
     image_quality: int = DEFAULT_IMAGE_QUALITY
@@ -198,6 +203,7 @@ class Settings:
             "send_interval_seconds": self.send_interval_seconds,
             "buffer_size": self.buffer_size,
             "cache_images": self.cache_images,
+            "cache_audio": self.cache_audio,
             "image_max_edge": self.image_max_edge,
             "image_quality": self.image_quality,
             "buffer_ignored_sender_ids": list(self.buffer_ignored_sender_ids),
@@ -242,16 +248,8 @@ class Settings:
                 f"每个会话保留的近期消息条数需在 {MIN_BUFFER_SIZE}~{MAX_BUFFER_SIZE} 之间"
             )
 
-        raw_cache_images = raw.get("cache_images", DEFAULT_CACHE_IMAGES)
-        if isinstance(raw_cache_images, str):
-            cache_images = raw_cache_images.strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-        else:
-            cache_images = bool(raw_cache_images)
+        cache_images = _parse_bool(raw.get("cache_images"), DEFAULT_CACHE_IMAGES)
+        cache_audio = _parse_bool(raw.get("cache_audio"), DEFAULT_CACHE_AUDIO)
 
         try:
             image_max_edge = int(raw.get("image_max_edge", DEFAULT_IMAGE_MAX_EDGE))
@@ -271,19 +269,10 @@ class Settings:
                 f"图片压缩质量需在 {MIN_IMAGE_QUALITY}~{MAX_IMAGE_QUALITY} 之间"
             )
 
-        raw_advice_seen = raw.get(
-            "cache_images_advice_seen",
+        advice_seen = _parse_bool(
+            raw.get("cache_images_advice_seen"),
             DEFAULT_CACHE_IMAGES_ADVICE_SEEN,
         )
-        if isinstance(raw_advice_seen, str):
-            advice_seen = raw_advice_seen.strip().lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            )
-        else:
-            advice_seen = bool(raw_advice_seen)
 
         debug_enabled = raw.get("decision_debug_enabled", False)
         if not isinstance(debug_enabled, bool):
@@ -294,6 +283,7 @@ class Settings:
             send_interval_seconds=interval,
             buffer_size=buffer_size,
             cache_images=cache_images,
+            cache_audio=cache_audio,
             image_max_edge=image_max_edge,
             image_quality=image_quality,
             buffer_ignored_sender_ids=_parse_sender_ids(
@@ -691,6 +681,15 @@ def _is_valid_decision_model_id(value: str) -> bool:
     if not value or len(value) > 64:
         return False
     return all(ch.isascii() and (ch.isalnum() or ch in "_-") for ch in value)
+
+
+def _parse_bool(raw: Any, default: bool) -> bool:
+    """设置里的开关：缺字段用默认值，兼容 JSON 布尔与表单传上来的字符串。"""
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
 
 
 def _parse_sender_ids(raw: Any) -> list[str]:

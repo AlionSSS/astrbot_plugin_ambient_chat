@@ -136,6 +136,9 @@ class ChatMessage:
     images: tuple[str, ...] = ()
     """图片在磁盘上的绝对路径，字节数见 ``image_bytes``。"""
     image_bytes: int = 0
+    audio: tuple[str, ...] = ()
+    """语音在磁盘上的绝对路径，字节数见 ``audio_bytes``；缓存关闭时为空。"""
+    audio_bytes: int = 0
     sender_id: str = ""
     """发送者在平台的原始 ID；群聊渲染时附在昵称后用于区分同名用户。"""
     kind: str = "text"

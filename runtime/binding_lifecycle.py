@@ -134,11 +134,21 @@ class BindingLifecycle:
         )
 
     def record(
-        self, umo: str, message: ChatMessage, *, image_components: Sequence[Any] = ()
+        self,
+        umo: str,
+        message: ChatMessage,
+        *,
+        image_components: Sequence[Any] = (),
+        audio_components: Sequence[Any] = (),
     ) -> bool:
         if not self.accepts(umo, for_message=True):
             return False
-        self._buffer.append(umo, message, image_components=image_components)
+        self._buffer.append(
+            umo,
+            message,
+            image_components=image_components,
+            audio_components=audio_components,
+        )
         return True
 
     def can_schedule(self, binding_id: str) -> bool:
@@ -282,6 +292,7 @@ class BindingLifecycle:
             enabled=settings.cache_images,
             max_edge=settings.image_max_edge,
             quality=settings.image_quality,
+            audio_enabled=settings.cache_audio,
         )
         for bid in list(self._cleanup):
             if not self._plugin.execution.is_idle(bid):

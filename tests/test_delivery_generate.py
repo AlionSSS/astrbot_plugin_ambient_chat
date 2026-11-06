@@ -43,3 +43,33 @@ async def test_generate_failure_returns_none() -> None:
     delivery = Delivery(_FailingContext(), ContextBuffer())  # type: ignore[arg-type]
 
     assert await delivery._generate("p2", "prompt", "", []) is None
+
+
+class _ProviderContext:
+    """只回答「这个模型支持哪些模态」。"""
+
+    def __init__(self, modalities: list[str]) -> None:
+        self._modalities = modalities
+
+    def get_provider_by_id(self, _provider_id: str) -> Any:
+        return SimpleNamespace(provider_config={"modalities": self._modalities})
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_audio_urls() -> None:
+    context = _Context()
+    delivery = Delivery(context, ContextBuffer())  # type: ignore[arg-type]
+
+    await delivery._generate("p1", "prompt", "", [], ["voice.amr"])
+
+    assert context.kwargs["audio_urls"] == ["voice.amr"]
+
+
+def test_audio_capability_follows_provider_modalities() -> None:
+    supports = Delivery(_ProviderContext(["audio"]), ContextBuffer())  # type: ignore[arg-type]
+    unconfigured = Delivery(_ProviderContext([]), ContextBuffer())  # type: ignore[arg-type]
+    text_only = Delivery(_ProviderContext(["image"]), ContextBuffer())  # type: ignore[arg-type]
+
+    assert supports._allows_audio("p")
+    assert unconfigured._allows_audio("p")
+    assert not text_only._allows_audio("p")

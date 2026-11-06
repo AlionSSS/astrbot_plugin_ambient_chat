@@ -227,6 +227,8 @@ class AmbientWebApi:
                     "truncated": len(messages) > len(shown),
                     "media_count": sum(len(item.images) for item in messages),
                     "media_bytes": sum(item.image_bytes for item in messages),
+                    "audio_count": sum(len(item.audio) for item in messages),
+                    "audio_bytes": sum(item.audio_bytes for item in messages),
                     "messages": [
                         {
                             "at": format_stamp(item.timestamp, tz),
@@ -236,6 +238,7 @@ class AmbientWebApi:
                             "self": item.is_bot,
                             "text": item.render_text(),
                             "images": len(item.images),
+                            "audio": len(item.audio),
                         }
                         for item in shown
                     ],

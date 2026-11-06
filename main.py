@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, File, Image, Poke, Reply
+from astrbot.api.message_components import At, File, Image, Plain, Poke, Record, Reply
 from astrbot.api.star import Context, Star, register
 
 from .common import PLUGIN_NAME, POKE_SELF_NAME, resolve_timezone
@@ -123,14 +123,13 @@ class AmbientChatPlugin(Star):
         message = self._build_message(event, umo)
         if message is None:
             return
+        chain = getattr(event.message_obj, "message", None) or []
         self.lifecycle.record(
             umo,
             message,
-            image_components=[
-                item
-                for item in (getattr(event.message_obj, "message", None) or [])
-                if isinstance(item, Image)
-            ],
+            image_components=[item for item in chain if isinstance(item, Image)],
+            # 语音原样转存，由缓冲决定是否启用（默认关闭，见 ADR-0031）。
+            audio_components=[item for item in chain if isinstance(item, Record)],
         )
 
     def _remember_session_name(self, event: AstrMessageEvent, umo: str) -> None:
@@ -186,18 +185,28 @@ class AmbientChatPlugin(Star):
     # ------------------------------------------------------------------ 发送后钩子
     @filter.after_message_sent()
     async def record_bot_message(self, event: AstrMessageEvent) -> None:
-        """记录 bot 自己的发言，用于冷却与未读基线。"""
+        """记录 bot 自己的发言，用于冷却与未读基线。
+
+        结果链里的语音/图片不能退化成 ``[Record]`` / ``[Image]`` 这类英文占位塞进
+        正文：那样决策模型会把「我发了一条语音」读成「我打了一行字」。形态交给
+        ``kind`` / ``attachments``，正文只留真正的文字；TTS 语音自带原文
+        （``Record.text``）时一并保留，模型至少知道这条语音说了什么。
+        """
         if not self.lifecycle.accepts(event.unified_msg_origin, for_message=True):
             return
         result = event.get_result()
         if result is None:
             return
-        text = ""
-        try:
-            text = result.get_plain_text(with_other_comps_mark=True).strip()
-        except Exception:  # noqa: BLE001
-            text = ""
+        chain = tuple(getattr(result, "chain", None) or ())
+        text = _chain_text(chain)
         if not text:
+            # 兜底：没有消息链的结果对象（测试桩、第三方发送路径）只取纯文本。
+            try:
+                text = result.get_plain_text().strip()
+            except Exception:  # noqa: BLE001
+                text = ""
+        kind, attachments = _chain_shape(chain, has_text=bool(text))
+        if not text and kind == "text" and not attachments:
             text = "[非文本消息]"
         self.lifecycle.record(
             event.unified_msg_origin,
@@ -207,6 +216,9 @@ class AmbientChatPlugin(Star):
                 timestamp=time.time(),
                 is_bot=True,
                 sender_id=_event_self_id(event),
+                kind=kind,
+                attachments=attachments,
+                file_name=_first_file_name_in(chain) if kind == "file" else "",
             ),
         )
 
@@ -271,13 +283,23 @@ def _message_shape(
     *,
     has_text: bool,
 ) -> tuple[str, tuple[str, ...]]:
+    """把收到的消息链拆成 ``(主形态, 其余附件)``。"""
+    return _chain_shape(getattr(event.message_obj, "message", None), has_text=has_text)
+
+
+def _chain_shape(
+    chain: Any,
+    *,
+    has_text: bool,
+) -> tuple[str, tuple[str, ...]]:
     """把消息链拆成 ``(主形态, 其余附件)``。
 
     戳一戳单独占主形态（纯动作消息），其余组件按出现顺序记成附件；这样
     「文字 + 图片/语音/文件」不会只剩文字，「表情/骰子」这类也终于能进缓冲。
+    收到的消息与 bot 的发送结果共用这套判定，语音在两边都是 ``audio``。
     """
     kinds: list[str] = []
-    for component in getattr(event.message_obj, "message", None) or []:
+    for component in chain or ():
         name = type(component).__name__.lower()
         # plain 是正文本身；at / reply 属于正文里的行内装饰（提及、引用），
         # 不改变这条消息的形态，否则一条「@某人 你好」会被记成 at 类型。
@@ -291,6 +313,24 @@ def _message_shape(
         # 带正文时不把整条当成纯戳一戳，否则正文会被丢掉。
         return ("text" if has_text else "poke"), others
     return kinds[0], tuple(kinds)
+
+
+def _chain_text(chain: Any) -> str:
+    """结果链里的正文：``Plain`` 的文字 + 语音组件自带的 TTS 原文。
+
+    ``get_plain_text(with_other_comps_mark=True)`` 会把语音、图片渲染成
+    ``[Record]`` / ``[Image]``，那是调试用的英文组件名，当正文存下来只会让决策
+    模型以为机器人真打了这几个字。这里只取真文字；同一段文字既发语音又发文字
+    （TTS 双发）时只留一份。
+    """
+    texts: list[str] = []
+    for component in chain or ():
+        if not isinstance(component, (Plain, Record)):
+            continue
+        value = strip_system_reminder(getattr(component, "text", "") or "").strip()
+        if value and value not in texts:
+            texts.append(value)
+    return " ".join(texts)
 
 
 def _mentions_self(chain: tuple[Any, ...] | list[Any], self_id: str) -> bool:
@@ -316,7 +356,12 @@ def _replies_to_self(chain: tuple[Any, ...] | list[Any], self_id: str) -> bool:
 
 def _first_file_name(event: AstrMessageEvent) -> str:
     """文件消息的文件名；没有则空串。"""
-    for component in getattr(event.message_obj, "message", None) or []:
+    return _first_file_name_in(getattr(event.message_obj, "message", None))
+
+
+def _first_file_name_in(chain: Any) -> str:
+    """消息链里第一个文件组件的文件名；没有则空串。"""
+    for component in chain or ():
         if isinstance(component, File):
             return str(getattr(component, "name", "") or "").strip()
     return ""

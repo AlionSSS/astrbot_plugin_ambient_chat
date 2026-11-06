@@ -28,7 +28,7 @@ from .models import (
     Settings,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 SETTINGS_FILENAME = "settings.json"
 DEFAULT_BINDING_NAME_PREFIX = "未命名"
 """绑定名称为空时的占位名前缀，拼成 ``未命名-N``（N 取该机器人下的第一个空位）。"""
