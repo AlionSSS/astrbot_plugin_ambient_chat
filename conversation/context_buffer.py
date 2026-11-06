@@ -42,6 +42,8 @@ PREHEAT_CONCURRENCY = 4
 @dataclass
 class _Activity:
     last_bot_at: float | None = None
+    streak_floor_at: float | None = None
+    """「连发」计数的时间下限：不晚于它的 bot 消息已不计入连发（退避期满后重置）。"""
     unread_by_sender: Counter[str] = field(default_factory=Counter)
 
     def record(self, message: ChatMessage) -> None:
@@ -418,16 +420,32 @@ class ContextBuffer:
         return activity.last_bot_at if activity else None
 
     def bot_streak(self, umo: str) -> int:
-        """自最后一条非 bot 消息以来，bot 连续发言的条数。"""
+        """自最后一条非 bot 消息（或退避基线）以来，bot 连续发言的条数。"""
         buffer = self._buffers.get(umo)
         if not buffer:
             return 0
+        activity = self._activity.get(umo)
+        floor = activity.streak_floor_at if activity else None
         count = 0
         for message in reversed(buffer):
             if not message.is_bot:
                 break
+            if floor is not None and message.timestamp <= floor:
+                break
             count += 1
         return count
+
+    def rebase_bot_streak(self, umo: str) -> None:
+        """把当前最后一条 bot 消息设为新基线，让「连发」从下一条发言重新累计。
+
+        连发无人回应的退避期满时调用：更早的 bot 消息不再计入连发，
+        于是需要重新连发满 N 条才会再次进入等待，而不是每 N 分钟才被
+        放行一条（见 ``speech.blockers``）。
+        """
+        activity = self._activity.get(umo)
+        if activity is None or activity.last_bot_at is None:
+            return
+        activity.streak_floor_at = activity.last_bot_at
 
     def unread_count(self, umo: str) -> int:
         """自 bot 最后一次发言以来收到的消息条数。"""

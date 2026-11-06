@@ -69,6 +69,11 @@ class BlockerChain:
 
         判定依赖上下文缓冲：机器人连续发言、中间没有其他人的消息即算「连发」，
         一旦有人发言，连发计数清零，拦截自然解除。
+
+        等待期满按「退避一次」处理：把当前最后一条发言设为连发新基线，
+        此后要重新连发满 count 条才会再次进入等待。否则基线一直停在
+        那串没人理的发言上，等待期满也只会被放行一条、随即重新计时，
+        实际效果就成了永久限速（每 N 分钟一条）。
         """
         count = int(blocker.get("count", 0) or 0)
         minutes = int(blocker.get("minutes", 0) or 0)
@@ -82,6 +87,7 @@ class BlockerChain:
             return ""
         deadline = last_at + minutes * 60
         if now.timestamp() >= deadline:
+            self._buffer.rebase_bot_streak(umo)
             return ""
         until = _format_until(deadline, now.tzinfo)
         if not until:
