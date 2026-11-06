@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>聊天氛围组</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <div>
+            <strong>聊天氛围组</strong>
+            <small>Ambient Chat</small>
+          </div>
+        </div>
+        <nav id="nav" class="nav">
+          <button class="nav-item active" data-section="rules" type="button">
+            <span>触发规则</span><em id="nav-count-rules">0</em>
+          </button>
+          <button class="nav-item" data-section="bindings" type="button">
+            <span>氛围组绑定</span><em id="nav-count-bindings">0</em>
+          </button>
+          <button class="nav-item" data-section="status" type="button">
+            <span>运行管理</span><em id="nav-count-status">0</em>
+          </button>
+          <button class="nav-item" data-section="settings" type="button">
+            <span>更多设置</span>
+          </button>
+        </nav>
+        <div class="sidebar-foot">
+          <span id="run-badge" class="badge">加载中…</span>
+          <button id="btn-refresh" class="btn ghost small" type="button">刷新</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <div id="banner" class="banner hidden"></div>
+        <div id="application-banner" class="banner application-banner hidden" role="status">
+          <span id="application-message"></span>
+          <button id="btn-apply-configuration" class="btn ghost small" type="button">重新应用</button>
+        </div>
+
+        <!-- ---------------------------------------------------------- 规则 -->
+        <section id="section-rules" class="section">
+          <header class="section-head">
+            <div class="section-title">
+              <h1>触发规则</h1>
+              <span class="section-help">
+                <button class="help-icon" type="button" aria-label="详细说明" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>规则本身不调度：被「氛围组绑定」引用后才会被触发。</li>
+                    <li>四步依次判断：触发入口 → 拦截机制 → 发言意向 → 生成并投递。</li>
+                    <li>拦截条件之间是「或」关系，任一命中即放弃该会话本次发言。</li>
+                    <li>发言意向与对话模型各只能选一个；留空时回退到 AstrBot 默认提供商。</li>
+                    <li>规则被绑定引用时不能删除，需先删除引用它的绑定。</li>
+                  </ul>
+                </div>
+              </span>
+            </div>
+            <p class="section-lead">规则只是配置，没有启停状态；启停在「运行管理」里操作。</p>
+          </header>
+
+          <div class="panel rule-panel">
+            <div class="list-head">
+              <span>全部规则 <em id="rule-count" class="hint"></em></span>
+              <button id="btn-new-rule" class="btn small primary" type="button">新建规则</button>
+            </div>
+            <ul id="rule-list" class="rule-rows"></ul>
+            <div id="rule-pager" class="pager hidden">
+              <button id="btn-rule-prev" class="btn ghost small" type="button">上一页</button>
+              <span id="rule-page-label" class="hint"></span>
+              <button id="btn-rule-next" class="btn ghost small" type="button">下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <div id="rule-modal" class="modal hidden" role="dialog" aria-modal="true">
+          <div class="modal-card rule-modal-card">
+            <header class="modal-head">
+              <h3 id="rule-modal-title">新建规则</h3>
+            </header>
+            <div class="modal-body">
+              <form id="rule-editor" onsubmit="return false">
+                <ol class="flow" aria-label="规则的生效顺序">
+                  <li>
+                    <b>1</b>
+                    <span class="flow-text"><strong>触发入口</strong><em>什么时候考虑发言</em></span>
+                  </li>
+                  <li>
+                    <b>2</b>
+                    <span class="flow-text"><strong>拦截机制</strong><em>什么情况下闭嘴</em></span>
+                  </li>
+                  <li>
+                    <b>3</b>
+                    <span class="flow-text"><strong>发言意向</strong><em>要不要说</em></span>
+                  </li>
+                  <li>
+                    <b>4</b>
+                    <span class="flow-text"><strong>生成并投递</strong><em>对话模型开口</em></span>
+                  </li>
+                </ol>
+
+                <h2>基础设置</h2>
+                <p class="hint">
+                  注入的对话条数、人格会影响决策模型、对话模型。
+                </p>
+                <div class="grid">
+                  <label class="field">
+                    <span>规则名称</span>
+                    <input data-path="name" type="text" placeholder="例如：夜话" />
+                  </label>
+                  <label class="field">
+                    <span>注入最近对话条数<span id="context-turns-limit"></span></span>
+                    <input data-path="context_turns" type="number" min="1" max="200" />
+                  </label>
+                  <label class="field inline">
+                    <span>向模型注入人格</span>
+                    <input data-path="inject_persona" type="checkbox" />
+                  </label>
+                </div>
+
+                <div class="step">
+                  <h2 class="step-head"><span class="step-no">1</span>触发入口</h2>
+                  <p class="hint">
+                    什么时候考虑发言。可同时配置多条，任一命中即进入第 2 步「拦截」；
+                    同一分钟内命中多条时只算一次，避免连发。
+                  </p>
+                  <div id="triggers" class="stack"></div>
+                  <button id="btn-add-trigger" class="btn ghost small" type="button">
+                    + 添加入口触发
+                  </button>
+                </div>
+
+                <div class="step">
+                  <h2 class="step-head"><span class="step-no">2</span>拦截机制</h2>
+                  <p class="hint">
+                    什么情况下闭嘴。第 1 步命中后逐项检查，任一命中即放弃该会话本次发言（不影响同一绑定下的其它会话），不再进入第 3 步。
+                  </p>
+                  <div id="blockers" class="stack"></div>
+                </div>
+
+                <div class="step">
+                  <h2 class="step-head"><span class="step-no">3</span>发言意向</h2>
+                  <p class="hint">
+                    要不要说。通过第 2 步后才判断：直接放行 = 必定发言；决策模型判断 = 先给会话消息打分，达到阈值才发言。
+                  </p>
+                  <div class="grid">
+                    <label class="field">
+                      <span>机制</span>
+                      <select data-path="intent.mode">
+                        <option value="direct">直接放行（必定发言）</option>
+                        <option value="decision">决策模型判断（打分达到阈值才发言）</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>决策模型</span>
+                      <select data-path="intent.decision_provider_id"></select>
+                    </label>
+                    <label class="field">
+                      <span>判定阈值</span>
+                      <input
+                        data-path="intent.threshold"
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                      />
+                    </label>
+                  </div>
+                  <p class="hint" id="intent-hint"></p>
+                </div>
+
+                <div class="step">
+                  <h2 class="step-head"><span class="step-no">4</span>生成并投递</h2>
+                  <p class="hint">
+                    用什么模型开口。通过第 3 步后，用该模型结合最近对话生成发言并投递到目标会话；留空则使用会话默认模型。
+                  </p>
+                  <div class="grid">
+                    <label class="field">
+                      <span>对话模型</span>
+                      <select data-path="chat_provider_id"></select>
+                    </label>
+                  </div>
+                </div>
+              </form>
+            </div>
+            <footer class="modal-foot">
+              <button id="btn-cancel-rule" class="btn ghost" type="button">取消</button>
+              <button id="btn-save-rule" class="btn primary" type="button">保存规则</button>
+            </footer>
+          </div>
+        </div>
+
+        <!-- ------------------------------------------------------ 氛围组绑定 -->
+        <section id="section-bindings" class="section hidden">
+          <header class="section-head">
+            <div class="section-title">
+              <h1>氛围组绑定</h1>
+              <span class="section-help">
+                <button class="help-icon" type="button" aria-label="详细说明" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>先在左侧选择机器人应用（UMO 的第一段，如 <code>default</code>），再为它新增绑定。</li>
+                    <li>一个号可以挂多条绑定；同一个会话在该号里最多属于一条绑定。</li>
+                    <li>新建或保存绑定只改配置，<b>不会自动启动</b>；启停在「运行管理」里操作。</li>
+                    <li><b>运行中的绑定只读</b>：可以点「编辑」查看，停止后才能保存修改或删除。</li>
+                  </ul>
+                </div>
+              </span>
+            </div>
+            <p class="section-lead">一条绑定 = 一条规则 + 一组目标会话 + 挑选策略。</p>
+          </header>
+
+          <div class="binding-page">
+            <aside class="list-panel">
+              <div class="list-head">
+                <span>机器人应用</span>
+                <span id="bot-count" class="hint"></span>
+              </div>
+              <ul id="bot-list" class="item-list"></ul>
+            </aside>
+
+            <div class="panel binding-main">
+              <div class="bot-head">
+                <div class="bot-head-text" id="binding-bot-head-text">
+                  <strong id="binding-bot-label" class="bot-id">未选择机器人</strong>
+                  <span id="binding-bot-desc" class="bot-desc"></span>
+                  <span id="binding-bot-meta" class="bot-meta"></span>
+                </div>
+                <button id="btn-new-binding" class="btn small primary" type="button">
+                  新增绑定
+                </button>
+              </div>
+              <p id="binding-bot-hint" class="hint"></p>
+              <div id="binding-empty" class="empty hidden"></div>
+              <ul id="binding-list" class="binding-rows"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- 运行状态 -->
+        <section id="section-status" class="section hidden">
+          <header class="section-head">
+            <div class="section-title">
+              <h1>运行管理</h1>
+              <span class="section-help">
+                <button class="help-icon" type="button" aria-label="详细说明" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>启动时先读取该会话的历史预热上下文，按钮转圈期间不能重复点击。</li>
+                    <li>停止的绑定不再调度、不再记录消息，其上下文缓冲会被清空，下次启动重新预热。</li>
+                    <li>「手动触发一次」按会话执行：跳过入口触发与挑选策略，但仍走拦截与意向判断，可能最终不发言。</li>
+                    <li>全局「启用自主发言」是总闸：关闭后只停调度，规则与绑定数据都保留。</li>
+                  </ul>
+                </div>
+              </span>
+            </div>
+            <p class="section-lead">统一启停所有绑定，展示运行细节；每 10 秒自动刷新。</p>
+          </header>
+          <div id="status-list" class="status-list"></div>
+        </section>
+
+        <!-- ---------------------------------------------------------- 更多设置 -->
+        <section id="section-settings" class="section hidden">
+          <header class="section-head">
+            <h1>更多设置</h1>
+            <p class="section-lead">发言节奏、上下文缓冲、决策模型与调试，保存后立即生效。</p>
+          </header>
+
+          <div class="panel">
+            <h2>发言节奏</h2>
+            <p class="hint">
+              控制同一时刻最多并行几次发言，以及相邻两次发言之间至少隔多久。
+            </p>
+            <div class="grid">
+              <label class="field">
+                <span>同时进行的发言数上限（1~5，默认 1 串行）</span>
+                <input id="setting-concurrency" type="number" min="1" max="5" />
+              </label>
+              <label class="field">
+                <span>两次发言之间的最小间隔（秒 0~30）</span>
+                <input id="setting-interval" type="number" min="0" max="30" step="0.5" />
+              </label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>上下文缓冲</h2>
+            <p class="hint">
+              决定每个会话记住多少近期消息、要过滤掉谁的消息，以及是否把图片也缓存下来。
+              <span class="section-help pop-anchor-right">
+                <button class="help-icon" type="button" aria-label="关于上下文缓冲" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <span class="help-pop" role="note">文本仅存内存，重启后清空。<br />缓冲条数不建议过多，只要保证能覆盖「注入最近对话条数」需要的量即可。<br />「过滤的用户 ID」里的用户消息不再进入缓冲，机器人发言不再考虑这些用户的消息。机器人自己的发言不受影响。<br />图片落盘时按「最长边」等比缩小、以「压缩质量」重编码（会损失画质）以节省磁盘；小图与压缩后反而更大的图保留原样。</span>
+              </span>
+            </p>
+            <div class="grid">
+              <label class="field">
+                <span>每个会话保留的近期消息条数（10~1000）</span>
+                <input id="setting-buffer" type="number" min="10" max="1000" step="10" />
+              </label>
+              <label class="field">
+                <span>过滤的用户 ID（例如QQ号，多个用逗号分隔）</span>
+                <input id="setting-ignored-senders" type="text" placeholder="例如：10001, 10002" />
+              </label>
+              <label class="field inline">
+                <span>是否缓存图片</span>
+                <input id="setting-cache-images" type="checkbox" />
+              </label>
+              <label class="field">
+                <span>缓存图片最长边（像素 320~2048）</span>
+                <input id="setting-image-edge" type="number" min="320" max="2048" step="160" />
+              </label>
+              <label class="field">
+                <span>缓存图片压缩质量（40~95）</span>
+                <input id="setting-image-quality" type="number" min="40" max="95" step="5" />
+              </label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>决策模型</h2>
+            <p class="hint">
+              自定义 SystemOne 兼容端点，供规则第 3 步「发言意向」选择，与 AstrBot 官方判断提供商并列显示。
+              <span class="section-help pop-anchor-right">
+                <button class="help-icon" type="button" aria-label="关于 criteria" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <span class="help-pop" role="note">本插件会自动传入 criteria，用于更合理的决策，同时兼容书生端砚这类要求 criteria 判定标准必填的平台。</span>
+              </span>
+            </p>
+            <div id="decision-models" class="stack"></div>
+            <p class="hint hidden" id="decision-models-empty">还没有自定义决策模型。</p>
+            <button id="btn-add-decision-model" class="btn ghost small" type="button">
+              + 新增决策模型
+            </button>
+          </div>
+
+          <div class="panel">
+            <h2>调试</h2>
+            <label class="field inline">
+              <span>记录决策调试日志（默认关闭）</span>
+              <input id="setting-decision-debug" type="checkbox" />
+            </label>
+            <p class="hint">
+              开启后记录完整决策请求与响应，包含人格和聊天内容。仅在排查问题时开启，
+              保存后生效；关闭后停止记录，已有文件保留。日志位于插件数据目录的
+              decision_debug 文件夹，最多保留最近 100 条，总量不超过 10 MiB，超限自动删除旧记录。
+            </p>
+          </div>
+
+          <div class="row-actions">
+            <button id="btn-save-settings" class="btn primary" type="button">
+              保存设置
+            </button>
+          </div>
+
+          <div class="panel">
+            <h2>运行信息</h2>
+            <dl class="kv">
+              <dt>自主发言总开关</dt>
+              <dd id="info-enabled">-</dd>
+              <dt>时区</dt>
+              <dd id="info-timezone">-</dd>
+              <dt>配置文件</dt>
+              <dd id="info-path">-</dd>
+              <dt>图片缓存路径</dt>
+              <dd id="info-media-path">-</dd>
+              <dt>数据结构版本</dt>
+              <dd id="info-schema">-</dd>
+              <dt>文件异常</dt>
+              <dd id="info-error">-</dd>
+            </dl>
+            <p class="hint">
+              「自主发言总开关」在 AstrBot 插件配置里（<code>enabled</code>）：关闭后只停调度，
+              本页面与规则数据都保留。
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="buffer-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card buffer-modal-card">
+        <header class="modal-head">
+          <h3 id="buffer-modal-title">上下文缓冲</h3>
+          <span class="modal-head-actions">
+            <button id="btn-buffer-refresh" class="btn ghost small" type="button">刷新</button>
+            <button id="btn-close-buffer" class="btn ghost small" type="button">关闭</button>
+          </span>
+        </header>
+        <div id="buffer-body" class="modal-body"></div>
+      </div>
+    </div>
+
+    <div id="binding-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card">
+        <header class="modal-head">
+          <h3 id="binding-modal-title">新增绑定</h3>
+          <span class="modal-bot">
+            <span class="bot-label">机器人</span>
+            <b id="binding-modal-bot" class="bot-id">-</b>
+            <span id="binding-modal-desc" class="bot-desc hidden"></span>
+          </span>
+        </header>
+        <div class="modal-body">
+          <div class="grid">
+            <label class="field">
+              <span>绑定名称</span>
+              <input
+                id="binding-name"
+                type="text"
+                maxlength="40"
+                placeholder="例如：夜话群-宽松"
+              />
+            </label>
+            <label class="field">
+              <span>规则</span>
+              <select id="binding-rule"></select>
+            </label>
+          </div>
+          <p class="hint hidden" id="binding-name-hint"></p>
+
+          <h2>目标会话</h2>
+          <p class="hint">
+            每行一个 UMO：<code>platform_id:message_type:session_id</code>，前缀必须是
+            <code id="binding-umo-prefix">-</code>；也可以向机器人发送 <code>/sid</code> 命令获取当前会话。
+          </p>
+          <textarea id="binding-targets" rows="5" placeholder="default:GroupMessage:123456789"></textarea>
+          <p class="hint error hidden" id="target-conflict-hint"></p>
+          <div class="row-actions">
+            <button id="btn-load-sessions" class="btn ghost small" type="button">
+              加载该机器人的最近会话
+            </button>
+            <button id="btn-add-sessions" class="btn ghost small" type="button">
+              把勾选的会话加入目标
+            </button>
+            <span id="session-notice" class="hint"></span>
+          </div>
+          <ul id="session-picker" class="session-picker"></ul>
+
+          <h2>有多个会话目标时的挑选策略</h2>
+          <div class="grid">
+            <label class="field">
+              <span>策略</span>
+              <select id="binding-selection-mode">
+                <option value="all">全部会话（按列表顺序依次触发）</option>
+                <option value="random">随机挑 N 个（按挑选顺序依次触发）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>N</span>
+              <input id="binding-selection-count" type="number" min="1" max="50" />
+            </label>
+          </div>
+          <p class="hint" id="selection-hint"></p>
+        </div>
+        <footer class="modal-foot">
+          <button id="btn-cancel-binding" class="btn ghost" type="button">取消</button>
+          <button id="btn-save-binding" class="btn primary" type="button">保存</button>
+        </footer>
+      </div>
+    </div>
+
+    <div id="dialog" class="dialog hidden" role="dialog" aria-modal="true">
+      <div class="dialog-card">
+        <h3 id="dialog-title">确认操作</h3>
+        <p id="dialog-message" class="dialog-message"></p>
+        <div class="row-actions dialog-actions">
+          <button id="dialog-cancel" class="btn ghost" type="button">取消</button>
+          <button id="dialog-ok" class="btn danger" type="button">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
