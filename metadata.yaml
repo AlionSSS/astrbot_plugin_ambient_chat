@@ -1,7 +1,7 @@
 name: astrbot_plugin_ambient_chat # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
 display_name: 聊天氛围组 # 用于展示的名字（需要版本 >= v4.5.0）
 desc: 让 AI 在群聊与私聊中像真人一样「在场」：按时机、按兴趣决定要不要接话，偶尔主动开个新话题，而不是只能等被点名。 # 插件简短描述
-version: v0.4.3 # 插件版本号。格式：v1.1.1 或者 v1.1
+version: v0.4.4 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: AlionSSS # 作者
 repo: https://github.com/AlionSSS/astrbot_plugin_ambient_chat # 插件的仓库地址
 support_platforms:

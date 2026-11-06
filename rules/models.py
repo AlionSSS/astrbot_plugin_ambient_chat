@@ -107,6 +107,13 @@ DEFAULT_CACHE_IMAGES_ADVICE_SEEN = False
 每次在设置页勾选开启缓存都会另行弹窗确认，不读取该标记。
 """
 
+DEFAULT_ASTRBOT_CONFIG_ADVICE_SEEN = False
+"""是否已提示过「建议调整 AstrBot 侧配置」：只在 WebUI 首次打开控制台时提示一次。
+
+提示内容涉及核心的群消息持久化与主动回复，用户改没改本插件无从判断，
+因此只按「提示过没有」记录，不跟随核心配置状态反复弹。
+"""
+
 MAX_BUFFER_IGNORED_SENDERS = 200
 """上下文缓冲最多忽略多少个发送者 ID。"""
 MAX_SENDER_ID_LENGTH = 128
@@ -218,6 +225,8 @@ class Settings:
     """自定义决策模型（SystemOne 兼容端点），供规则按 `custom:<id>` 引用。"""
     cache_images_advice_seen: bool = DEFAULT_CACHE_IMAGES_ADVICE_SEEN
     """「建议开启图片缓存」提示是否已展示过：跨会话只提示一次。"""
+    astrbot_config_advice_seen: bool = DEFAULT_ASTRBOT_CONFIG_ADVICE_SEEN
+    """「建议调整 AstrBot 侧配置」提示是否已展示过：跨会话只提示一次。"""
     decision_debug_enabled: bool = False
     """是否记录完整决策请求与响应；默认关闭，文件按数量与总字节数轮转。"""
 
@@ -238,6 +247,7 @@ class Settings:
             "buffer_ignored_sender_ids": list(self.buffer_ignored_sender_ids),
             "decision_models": [model.to_dict() for model in self.decision_models],
             "cache_images_advice_seen": self.cache_images_advice_seen,
+            "astrbot_config_advice_seen": self.astrbot_config_advice_seen,
             "decision_debug_enabled": self.decision_debug_enabled,
         }
 
@@ -348,6 +358,11 @@ class Settings:
             DEFAULT_CACHE_IMAGES_ADVICE_SEEN,
         )
 
+        astrbot_advice_seen = _parse_bool(
+            raw.get("astrbot_config_advice_seen"),
+            DEFAULT_ASTRBOT_CONFIG_ADVICE_SEEN,
+        )
+
         debug_enabled = raw.get("decision_debug_enabled", False)
         if not isinstance(debug_enabled, bool):
             raise RuleError("决策调试日志开关必须是布尔值")
@@ -370,6 +385,7 @@ class Settings:
             ),
             decision_models=_parse_decision_models(raw.get("decision_models")),
             cache_images_advice_seen=advice_seen,
+            astrbot_config_advice_seen=astrbot_advice_seen,
             decision_debug_enabled=debug_enabled,
         )
 

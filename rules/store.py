@@ -28,7 +28,7 @@ from .models import (
     Settings,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SETTINGS_FILENAME = "settings.json"
 DEFAULT_BINDING_NAME_PREFIX = "未命名"
 """绑定名称为空时的占位名前缀，拼成 ``未命名-N``（N 取该机器人下的第一个空位）。"""
@@ -374,6 +374,14 @@ class RuleStore:
         if self.settings.cache_images_advice_seen:
             return self.settings
         settings = replace(self.settings, cache_images_advice_seen=True)
+        self._commit(settings=settings)
+        return settings
+
+    def mark_astrbot_config_advice_seen(self) -> Settings:
+        """记录「建议调整 AstrBot 侧配置」提示已展示，之后不再重复提示。"""
+        if self.settings.astrbot_config_advice_seen:
+            return self.settings
+        settings = replace(self.settings, astrbot_config_advice_seen=True)
         self._commit(settings=settings)
         return settings
 

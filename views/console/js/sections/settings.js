@@ -237,6 +237,9 @@ async function saveSettings() {
       cache_images_advice_seen: Boolean(
         state.meta?.settings?.cache_images_advice_seen,
       ),
+      astrbot_config_advice_seen: Boolean(
+        state.meta?.settings?.astrbot_config_advice_seen,
+      ),
     },
   };
   try {

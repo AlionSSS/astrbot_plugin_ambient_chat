@@ -117,6 +117,12 @@ class AmbientWebApi:
                 "记录「建议开启图片缓存」提示已展示",
             ),
             (
+                f"{ROUTE_PREFIX}/settings/astrbot_advice_seen",
+                self.mark_astrbot_config_advice_seen,
+                ["POST"],
+                "记录「建议调整 AstrBot 侧配置」提示已展示",
+            ),
+            (
                 f"{ROUTE_PREFIX}/configuration/apply",
                 self.apply_configuration,
                 ["POST"],
@@ -432,6 +438,16 @@ class AmbientWebApi:
         """只写提示标记：不影响运行中的调度，因此不重新应用配置。"""
         try:
             settings = self._plugin.store.mark_cache_images_advice_seen()
+        except RuleError as exc:
+            return error_response(str(exc), status_code=400)
+        except OSError as exc:
+            return error_response(f"写入失败：{exc}", status_code=500)
+        return json_response({"settings": settings.to_dict(), "saved": True})
+
+    async def mark_astrbot_config_advice_seen(self) -> Any:
+        """只写提示标记：不改变任何运行时行为，因此不重新应用配置。"""
+        try:
+            settings = self._plugin.store.mark_astrbot_config_advice_seen()
         except RuleError as exc:
             return error_response(str(exc), status_code=400)
         except OSError as exc:

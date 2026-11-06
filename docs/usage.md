@@ -179,7 +179,7 @@
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "settings": {
     "concurrency": 1,
     "send_interval_seconds": 2.0,
@@ -199,7 +199,8 @@
         "api_key": ""
       }
     ],
-    "cache_images_advice_seen": false
+    "cache_images_advice_seen": false,
+    "astrbot_config_advice_seen": false
   },
   "rules": [
     {
@@ -245,4 +246,4 @@
 }
 ```
 
-关于 `schema_version`：当前为 `6`（`3` 起多出 `decision_models`，`4` 起多出 `cache_images_advice_seen`，`5` 起多出默认关闭的 `decision_debug_enabled`，`6` 起多出默认关闭的 `cache_audio`；旧文件缺字段时按默认值读取）。读盘只按缺省值补齐、没有版本上界守卫；因此把新版文件拿回旧版插件时，旧版会按 `platform_id` 去重，**静默丢弃**同一机器人应用除第一条以外的绑定。
+关于 `schema_version`：当前为 `7`（`3` 起多出 `decision_models`，`4` 起多出 `cache_images_advice_seen`，`5` 起多出默认关闭的 `decision_debug_enabled`，`6` 起多出默认关闭的 `cache_audio`，`7` 起多出 `astrbot_config_advice_seen`；旧文件缺字段时按默认值读取）。读盘只按缺省值补齐、没有版本上界守卫；因此把新版文件拿回旧版插件时，旧版会按 `platform_id` 去重，**静默丢弃**同一机器人应用除第一条以外的绑定。

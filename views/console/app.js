@@ -7,6 +7,7 @@
  * 不再把所有按钮的 if 分支堆在一个回调里。
  */
 import { ready } from './js/api.js';
+import { maybeShowAstrbotConfigAdvice } from './js/first-run.js';
 import { renderBindings } from './js/sections/bindings.js';
 import {
   actions as bindingModalActions,
@@ -129,6 +130,8 @@ async function boot() {
   await ready();
   await refresh();
   showSection('rules');
+  // 首次进入控制台的一次性提示：不等待用户关闭，弹窗自己处理交互与标记写入。
+  void maybeShowAstrbotConfigAdvice();
 }
 
 boot().catch((error) => {
