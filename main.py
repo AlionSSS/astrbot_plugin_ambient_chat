@@ -22,6 +22,7 @@ from .conversation.messages import (
 from .rules.models import Binding
 from .rules.store import RuleStore
 from .runtime.account import BotAccountName, adapter_self_id
+from .runtime.attention import AttentionStore
 from .runtime.binding_lifecycle import BindingLifecycle
 from .runtime.configuration import ConfigurationApplication
 from .runtime.execution import SpeechExecution
@@ -54,13 +55,14 @@ class AmbientSessionFilter(filter.CustomFilter):
     PLUGIN_NAME,
     "AlionSSS",
     "让 AI 在群聊与私聊中像真人一样「在场」：按时机、按兴趣决定要不要接话，偶尔主动开个新话题，而不是只能等被点名。",
-    "0.4.4",
+    "0.4.5",
 )
 class AmbientChatPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self.store = RuleStore()
+        self.attention = AttentionStore()
         global _plugin_ref
         _plugin_ref = self
         self.buffer = ContextBuffer(
@@ -93,6 +95,7 @@ class AmbientChatPlugin(Star):
     async def initialize(self) -> None:
         """插件激活 / 热重载后调用。"""
         self.store.load(self.timezone)
+        self.attention.load()
         self.buffer.reset_media()
         self.account.forget()
         await self.configuration.apply()
@@ -102,11 +105,20 @@ class AmbientChatPlugin(Star):
         await self.buffer.close()
         await self.router.close()
         await self.account.close()
+        await self.attention.close()
         logger.info("[Ambient] 调度已停止。")
 
     async def apply_store_changes(self) -> None:
         """同步绑定接管、执行、缓冲及调度；应用失败由 configuration 记录。"""
         await self.lifecycle.reconcile()
+        # 读盘失败时 store 是空的：照常清理会把全部关注度当成孤儿删掉并落盘，
+        # 那是「settings.json 坏了」连累画像一起丢。宁可留着脏数据等修好再清。
+        if self.store.load_failed:
+            return
+        # 目标从所有绑定里消失后，它的关注度也就没有归属了（ADR-0034）。
+        self.attention.prune(
+            {umo for binding in self.store.bindings.values() for umo in binding.targets}
+        )
 
     async def start_binding(self, binding_id: str) -> Binding:
         return await self.lifecycle.start(binding_id)

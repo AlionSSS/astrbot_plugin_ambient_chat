@@ -307,6 +307,12 @@ class SpeechExecution:
         if blocked.blocked:
             return SpeechResult("skipped", blocked.reason)
         intent = await plugin.judge.judge(rule, umo, plugin.buffer, now)
+        # 判定一出就记账（ADR-0034）：之后的拦截、生成失败都不改变「有多想说话」这个事实，
+        # 记账也不该等发送结果，否则关注度会退化成「发送成功率」。
+        if intent.scores is not None:
+            plugin.attention.observe(
+                umo, interested=intent.scores[0], new_topic=intent.scores[1]
+            )
         if not intent.speak:
             # 判定失败不是「不想说话」：单独的 state 让页面标红并提示排查方向。
             state = "decision_failed" if intent.failure else "skipped"

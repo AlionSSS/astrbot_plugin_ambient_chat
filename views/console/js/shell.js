@@ -138,7 +138,7 @@ export function renderRunBadge() {
   }
   if (enabled) {
     badge.textContent = '调度中';
-    badge.title = '「启用自主发言」已打开，绑定按各自的入口触发调度。';
+    badge.title = '「启用自主发言」已打开，绑定按各自的触发入口调度。';
     return;
   }
   badge.textContent = '已暂停';

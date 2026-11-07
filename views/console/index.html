@@ -85,25 +85,6 @@
             </header>
             <div class="modal-body">
               <form id="rule-editor" onsubmit="return false">
-                <ol class="flow" aria-label="规则的生效顺序">
-                  <li>
-                    <b>1</b>
-                    <span class="flow-text"><strong>触发入口</strong><em>什么时候考虑发言</em></span>
-                  </li>
-                  <li>
-                    <b>2</b>
-                    <span class="flow-text"><strong>拦截机制</strong><em>什么情况下闭嘴</em></span>
-                  </li>
-                  <li>
-                    <b>3</b>
-                    <span class="flow-text"><strong>发言意向</strong><em>要不要说</em></span>
-                  </li>
-                  <li>
-                    <b>4</b>
-                    <span class="flow-text"><strong>生成并投递</strong><em>对话模型开口</em></span>
-                  </li>
-                </ol>
-
                 <h2>基础设置</h2>
                 <p class="hint">
                   注入的对话条数、人格会影响决策模型、对话模型。
@@ -126,28 +107,26 @@
                 <div class="step">
                   <h2 class="step-head"><span class="step-no">1</span>触发入口</h2>
                   <p class="hint">
-                    什么时候考虑发言。可同时配置多条，任一命中即进入第 2 步「拦截」；
+                    什么时候考虑看聊天会话。可同时配置多条，任一命中即进入第 2 步「拦截」；
                     同一分钟内命中多条时只算一次，避免连发。
                   </p>
                   <div id="triggers" class="stack"></div>
                   <button id="btn-add-trigger" class="btn ghost small" type="button">
-                    + 添加入口触发
+                    + 添加触发入口
                   </button>
                 </div>
 
                 <div class="step">
                   <h2 class="step-head"><span class="step-no">2</span>拦截机制</h2>
                   <p class="hint">
-                    什么情况下闭嘴。第 1 步命中后逐项检查，任一命中即放弃该会话本次发言（不影响同一绑定下的其它会话），不再进入第 3 步。
+                    什么情况下跳过聊天会话。第 1 步命中后逐项检查，任一命中即放弃该会话本次发言（不影响同一绑定下的其它会话），不再进入第 3 步。
                   </p>
                   <div id="blockers" class="stack"></div>
                 </div>
 
                 <div class="step">
                   <h2 class="step-head"><span class="step-no">3</span>发言意向</h2>
-                  <p class="hint">
-                    要不要说。通过第 2 步后才判断：按概率放行 = 以设定概率决定是否发言（100% 即必定发言）；决策模型判断 = 先给会话消息打分，达到阈值才发言。
-                  </p>
+                  <p class="hint">思考要不要发言。通过第 2 步后才判断。建议选「决策模型判定」。</p>
                   <div class="grid">
                     <label class="field">
                       <span>机制</span>
@@ -182,12 +161,13 @@
                     </label>
                   </div>
                   <p class="hint" id="intent-hint"></p>
+                  <p class="hint error hidden" id="decision-provider-warning">AstrBot 未配置判断提供商，请到模型提供商设置里添加，或在本插件更多设置页面添加一个自定义决策模型。</p>
                 </div>
 
                 <div class="step">
                   <h2 class="step-head"><span class="step-no">4</span>生成并投递</h2>
                   <p class="hint">
-                    用什么模型开口。通过第 3 步后，用该模型结合最近对话生成发言并投递到目标会话；留空则使用会话默认模型。
+                    用什么模型开口。通过第 3 步后，用该模型结合最近对话生成发言并投递到目标会话；留空则使用 AstrBot 会话默认模型。
                   </p>
                   <div class="grid">
                     <label class="field">
@@ -263,7 +243,7 @@
                   <ul class="hint-list">
                     <li>启动时先读取该会话的历史预热上下文，按钮转圈期间不能重复点击。</li>
                     <li>停止的绑定不再调度、不再记录消息，其<b>上下文缓冲会被清空</b>，下次启动重新预热。</li>
-                    <li>「手动触发一次」按会话执行：跳过入口触发与挑选策略，但仍走拦截与意向判断，<b>可能最终不发言</b>。</li>
+                    <li>「手动触发一次」按会话执行：跳过触发入口与挑选策略，但仍走拦截与意向判断，<b>可能最终不发言</b>。</li>
                     <li>一次发言可能按「分段拟人发言」拆成多条消息，逐条发出期间状态一直停在「发送中」，结果按整次发言统计。</li>
                     <li>全局「启用自主发言」是总闸：关闭后只停调度，规则与绑定数据都保留。</li>
                   </ul>
@@ -484,6 +464,7 @@
       <div class="modal-card">
         <header class="modal-head">
           <h3 id="binding-modal-title">新增绑定</h3>
+          <span class="hint">它只是配置，启停在「运行管理」里操作。</span>
           <span class="modal-bot">
             <span class="bot-label">机器人</span>
             <b id="binding-modal-bot" class="bot-id">-</b>
@@ -491,6 +472,7 @@
           </span>
         </header>
         <div class="modal-body">
+          <h2>基础设置</h2>
           <div class="grid">
             <label class="field">
               <span>绑定名称</span>
@@ -501,46 +483,57 @@
                 placeholder="例如：夜话群-宽松"
               />
             </label>
-            <label class="field">
-              <span>规则</span>
-              <select id="binding-rule"></select>
-            </label>
           </div>
           <p class="hint hidden" id="binding-name-hint"></p>
 
-          <h2>目标会话</h2>
-          <p class="hint">
-            每行一个 UMO：<code>platform_id:message_type:session_id</code>，前缀必须是
-            <code id="binding-umo-prefix">-</code>；也可以向机器人发送 <code>/sid</code> 命令获取当前会话。
-          </p>
-          <textarea id="binding-targets" rows="5" placeholder="default:GroupMessage:123456789"></textarea>
-          <p class="hint error hidden" id="target-conflict-hint"></p>
-          <div class="row-actions">
-            <button id="btn-load-sessions" class="btn ghost small" type="button">
-              加载该机器人的最近会话
-            </button>
-            <button id="btn-add-sessions" class="btn ghost small" type="button">
-              把勾选的会话加入目标
-            </button>
-            <span id="session-notice" class="hint"></span>
+          <div class="step">
+            <h2 class="step-head"><span class="step-no">1</span>目标会话</h2>
+            <p class="hint">
+              每行一个 UMO：<code>platform_id:message_type:session_id</code>；也可以向机器人发送 <code>/sid</code> 命令获取当前会话。
+            </p>
+            <textarea id="binding-targets" rows="5" placeholder="default:GroupMessage:123456789"></textarea>
+            <p class="hint error hidden" id="target-conflict-hint"></p>
+            <div class="row-actions">
+              <button id="btn-load-sessions" class="btn ghost small" type="button">
+                加载该机器人的最近会话
+              </button>
+              <button id="btn-add-sessions" class="btn ghost small" type="button">
+                把勾选的会话加入目标
+              </button>
+              <span id="session-notice" class="hint"></span>
+            </div>
+            <ul id="session-picker" class="session-picker"></ul>
           </div>
-          <ul id="session-picker" class="session-picker"></ul>
 
-          <h2>有多个会话目标时的挑选策略</h2>
-          <div class="grid">
-            <label class="field">
-              <span>策略</span>
-              <select id="binding-selection-mode">
-                <option value="all">全部会话（按列表顺序依次触发）</option>
-                <option value="random">随机挑 N 个（按挑选顺序依次触发）</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>N</span>
-              <input id="binding-selection-count" type="number" min="1" max="50" />
-            </label>
+          <div class="step">
+            <h2 class="step-head"><span class="step-no">2</span>有多个会话目标时的挑选策略</h2>
+            <div class="grid">
+              <label class="field">
+                <span>策略</span>
+                <select id="binding-selection-mode">
+                  <option value="all">全部会话（按列表顺序依次触发）</option>
+                  <option value="random">随机挑 N 个（按挑选顺序依次触发）</option>
+                  <option value="weighted">按关注度加权挑 N 个（关注度高的先触发）</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>N</span>
+                <input id="binding-selection-count" type="number" min="1" max="50" />
+              </label>
+            </div>
+            <p class="hint" id="selection-hint"></p>
           </div>
-          <p class="hint" id="selection-hint"></p>
+
+          <div class="step">
+            <h2 class="step-head"><span class="step-no">3</span>规则配置</h2>
+            <p class="hint">规则决定「什么时候考虑看聊天会话 → 什么情况下跳过聊天会话 → 思考要不要发言 → 怎么生成」。</p>
+            <div class="grid">
+              <label class="field">
+                <select id="binding-rule" aria-label="规则"></select>
+              </label>
+            </div>
+            <p class="hint error hidden" id="selection-rule-warning"><strong>该规则不做决策判定，关注度不会更新。当前挑选策略下，规则的发言意向机制建议选择「决策模型判定」</strong></p>
+          </div>
         </div>
         <footer class="modal-foot">
           <button id="btn-cancel-binding" class="btn ghost" type="button">取消</button>

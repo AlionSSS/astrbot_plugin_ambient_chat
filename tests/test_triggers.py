@@ -1,4 +1,4 @@
-"""入口触发：窗口最小间隔 / 星期 / 固定间隔 / 一次性过期的解析与采样。"""
+"""触发入口：窗口最小间隔 / 星期 / 固定间隔 / 一次性过期的解析与采样。"""
 
 from __future__ import annotations
 
@@ -112,6 +112,14 @@ def test_window_skips_weekdays_not_selected() -> None:
     now = datetime(2026, 11, 5, 12, 0, tzinfo=TZ)
     fire_at = scheduler._window_next_fire(BINDING, 0, trigger, now, TZ)
     assert fire_at is not None and fire_at.date() == date(2026, 11, 6)
+
+
+def test_interval_parse_defaults_match_new_rule_modal() -> None:
+    """后端缺省值要对齐新建规则弹窗：固定间隔 30 分钟、抖动 15%。"""
+    trigger = Trigger.parse({"type": "interval"}, TZ)
+
+    assert trigger.every_minutes == 30
+    assert trigger.jitter_percent == 15
 
 
 def test_interval_is_periodic_from_the_anchor() -> None:

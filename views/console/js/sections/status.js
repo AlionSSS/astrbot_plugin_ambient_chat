@@ -65,7 +65,7 @@ export function renderStatus() {
       const rule = state.rules.find((entry) => entry.id === item.rule_id);
       const expired = (rule?.triggers || []).filter(triggerExpired).length;
       const expiredNote = expired
-        ? `<p class="hint error">${expired} 个入口触发已过期，不会再触发；到规则里改成将来的时间即可。</p>`
+        ? `<p class="hint error">${expired} 个触发入口已过期，不会再触发；到规则里改成将来的时间即可。</p>`
         : '';
       const targets = (item.targets || [])
         .map((target) => {
@@ -77,9 +77,17 @@ export function renderStatus() {
           const failed = target.state === 'decision_failed';
           const phase = ({ queued: '等待并发名额', judging: '判断中', generating: '生成中', pacing: '等待发送时机', sending: '发送中', recording: '记录中' })[target.phase];
           const resultText = phase || target.last_result || '-';
+          // 关注度是会话级长期画像，与当前绑定的挑选策略无关，任何策略下都展示；
+          // 显示观测次数，才看得出「0.50」是没被判定过还是真的中性。
+          const attention = target.attention || { weight: 0.5, observations: 0 };
+          const observations = Number(attention.observations) || 0;
+          const attentionText = observations
+            ? `关注度 ${Number(attention.weight).toFixed(2)}（${observations} 次观测）`
+            : '关注度 0.50（尚无观测）';
           return `<li>
             <code>${escapeHtml(target.umo)}</code>
             <span class="${failed && !phase ? 'failed' : 'muted'}"${failed ? ' title="决策模型判定失败，本次未发送消息；页面轮询期间会保留这条原因"' : ''}>${escapeHtml(resultText)}</span>
+            <span class="muted attention" title="决策模型历次判定累积出的长期兴趣权重，取值 0~1，跨重启保留">${escapeHtml(attentionText)}</span>
             <em title="本插件在该会话最近一次成功自主发言的时间，普通对话回复不计入">${escapeHtml(target.last_fire_at || '-')}</em>
             <button class="btn small ghost" type="button" title="查看该会话的上下文缓冲（只读）"
               data-buffer-binding="${escapeHtml(item.binding_id)}"
@@ -102,6 +110,9 @@ export function renderStatus() {
           </div>
           <div class="status-actions">
             <span class="muted">${escapeHtml(selectionText(item.selection))} · ${item.target_count} 个目标会话</span>
+            <button class="btn small ghost" type="button"
+              title="把该绑定所有目标会话的关注度清回 0.50，历史判定不再影响挑选"
+              data-reset-attention="${escapeHtml(item.binding_id)}">重置关注度</button>
             <button class="btn small ${running ? 'ghost' : 'primary'}${busy ? ' is-loading' : ''}"
               data-toggle-binding="${escapeHtml(item.binding_id)}"
               data-next-enabled="${starting || enabled ? 'false' : 'true'}"
@@ -174,7 +185,7 @@ async function forceTrigger(bindingId, umo) {
       `规则：${item.rule_name || '-'}`,
       '',
       '将立即执行一次：拦截检查 → 发言意向 → 投递。',
-      '入口触发与挑选策略会被跳过；若被拦截或判定为不发言，本次不会发送任何消息。',
+      '触发入口与挑选策略会被跳过；若被拦截或判定为不发言，本次不会发送任何消息。',
     ].join('\n'),
     '手动触发一次',
     '确定触发',
@@ -202,6 +213,33 @@ async function forceTrigger(bindingId, umo) {
   }
 }
 
+/**
+ * 重置一条绑定的关注度：属于运行期画像而非配置，因此绑定停止时也能点。
+ * 关注度会回到 0.50（尚无观测），此后按新的判定重新累积。
+ */
+async function resetAttention(bindingId) {
+  const id = String(bindingId || '');
+  if (!id) return;
+  const confirmed = await askConfirm(
+    [
+      '该绑定所有目标会话的关注度都会回到 0.50（尚无观测）。',
+      '历史判定不再影响挑选，之后按新的判定重新累积；其余运行状态不受影响。',
+    ].join('\n'),
+    '重置关注度',
+    '确定重置',
+    { primary: true },
+  );
+  if (!confirmed) return;
+  try {
+    await apiPost('bindings/attention/reset', { binding_id: id });
+    toast('关注度已重置');
+  } catch (error) {
+    toast(error.message || '重置关注度失败', true);
+  } finally {
+    if (state.section === 'status') await loadStatus().catch(() => {});
+  }
+}
+
 on('section', (name) => {
   if (name !== 'status') {
     stopStatusPolling();
@@ -220,4 +258,5 @@ export const actions = {
   'data:toggleBinding': (bindingId, button) =>
     toggleBinding(bindingId, button.dataset.nextEnabled === 'true'),
   'data:forceBinding': (bindingId, button) => forceTrigger(bindingId, button.dataset.forceUmo),
+  'data:resetAttention': (bindingId) => resetAttention(bindingId),
 };

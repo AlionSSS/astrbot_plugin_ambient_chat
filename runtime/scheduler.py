@@ -18,7 +18,15 @@ from zoneinfo import ZoneInfo
 from astrbot.api import logger
 
 from ..common import TRIGGER_CRON, TRIGGER_INTERVAL, TRIGGER_ONCE, parse_hhmm
-from ..rules.models import SELECTION_RANDOM, Binding, Rule, RuleError, Trigger
+from ..rules.models import (
+    SELECTION_ALL,
+    SELECTION_WEIGHTED,
+    Binding,
+    Rule,
+    RuleError,
+    Trigger,
+)
+from .attention import weighted_sample
 from .execution import SpeechResult
 
 if TYPE_CHECKING:
@@ -178,7 +186,7 @@ class AmbientScheduler:
     async def trigger_target(self, binding_id: str, umo: str) -> dict[str, Any]:
         """立即对一个目标会话执行一次「拦截 → 意向 → 投递」。
 
-        只用于 WebUI「手动触发一次」：跳过入口触发、挑选策略与触发合并，
+        只用于 WebUI「手动触发一次」：跳过触发入口、挑选策略与触发合并，
         其余判断与定时触发完全一致；被拦截或判定不发言时不发送任何消息。
         """
         binding = self._plugin.store.get_binding(binding_id)
@@ -435,12 +443,18 @@ class AmbientScheduler:
 
     # ------------------------------------------------------------------ 执行
     def _select_targets(self, binding: Binding) -> list[str]:
-        """按挑选策略决定本次触发要处理的目标会话。"""
+        """按挑选策略决定本次触发要处理的目标会话。
+
+        ``weighted`` 在全选边界下仍然走加权路径：模式内行为一致（关注度高的先执行）
+        比跨模式一致更重要，N 调大后顺序突然变回列表顺序是更难解释的怪癖。
+        """
         targets = list(binding.targets)
         selection = binding.selection
-        if selection.mode != SELECTION_RANDOM:
+        if selection.mode == SELECTION_ALL:
             return targets
         count = max(1, min(selection.count, len(targets)))
+        if selection.mode == SELECTION_WEIGHTED:
+            return weighted_sample(targets, self._plugin.attention.weight, count)
         if count >= len(targets):
             return targets
         return random.sample(targets, count)
@@ -530,6 +544,8 @@ class AmbientScheduler:
                         "last_result": execution.get("reason", "等待首次触发"),
                         "state": execution.get("state", ""),
                         "phase": execution.get("phase", "idle"),
+                        # 关注度与观测次数：加权挑选要可解释，否则用户只会觉得「偏心」
+                        "attention": self._plugin.attention.detail(umo),
                     }
                 )
             result.append(

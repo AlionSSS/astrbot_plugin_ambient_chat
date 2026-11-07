@@ -73,7 +73,6 @@ function renderBindingModal() {
   // 弹窗右上角只显示机器人 id（如「机器人 default」），不展示 id 后面的描述文案。
   $('#binding-modal-desc').textContent = '';
   $('#binding-modal-desc').classList.add('hidden');
-  $('#binding-umo-prefix').textContent = bindingPlatformId() || '-';
   $('#binding-name').value = binding.name || '';
 
   const ruleSelect = $('#binding-rule');
@@ -97,11 +96,7 @@ function renderBindingModal() {
   renderTargetConflicts();
   renderSessionPicker();
   // 运行中只读：可以打开查看，但保存按下去只会被后端拒绝（ADR-0016），提前禁用。
-  const locked = binding.enabled !== false || binding.lifecycle === 'stopping';
-  const saveButton = $('#btn-save-binding');
-  saveButton.disabled = locked;
-  saveButton.textContent = binding.lifecycle === 'stopping' ? '停止收尾中' : locked ? '运行中不可保存' : '保存';
-  saveButton.title = locked ? '请先到「运行管理」停止该绑定后再修改' : '';
+  renderSaveButton();
 }
 
 function renderNameHint() {
@@ -134,6 +129,26 @@ function targetConflicts() {
   return conflicts;
 }
 
+/** 运行中只读：与 saveBinding 的拦截条件保持一致（ADR-0016）。 */
+function saveLockState() {
+  const binding = state.editingBinding;
+  if (!binding) return { locked: false, stopping: false };
+  const stopping =
+    binding.lifecycle === 'stopping' ||
+    currentBindingPhase(binding.id) === 'stopping';
+  return { locked: binding.enabled !== false || stopping, stopping };
+}
+
+/** 保存按钮状态的唯一出口：运行中只读优先于会话冲突，避免各渲染函数互相覆盖。 */
+function renderSaveButton(conflicts = targetConflicts()) {
+  const save = $('#btn-save-binding');
+  if (!save) return;
+  const { locked, stopping } = saveLockState();
+  save.disabled = locked || conflicts.length > 0;
+  save.textContent = stopping ? '停止收尾中' : locked ? '运行中不可保存' : '保存';
+  save.title = locked ? '请先到「运行管理」停止该绑定后再修改' : '';
+}
+
 function renderTargetConflicts() {
   const conflicts = targetConflicts();
   const hint = $('#target-conflict-hint');
@@ -141,8 +156,7 @@ function renderTargetConflicts() {
     hint.classList.toggle('hidden', !conflicts.length);
     hint.textContent = conflicts.join('；');
   }
-  const save = $('#btn-save-binding');
-  if (save) save.disabled = conflicts.length > 0;
+  renderSaveButton(conflicts);
   return conflicts;
 }
 
@@ -152,17 +166,27 @@ function renderSelectionHint() {
   const countInput = $('#binding-selection-count');
   const count = Number(countInput.value) || 1;
   const hint = $('#selection-hint');
+  const warning = $('#selection-rule-warning');
   // 「全部会话」策略下 N 不生效，禁用输入以表达这一点。
-  const randomMode = mode === 'random';
-  countInput.disabled = !randomMode;
-  countInput.title = randomMode ? '' : '选择「全部会话」时 N 不生效';
-  countInput.closest('.field')?.classList.toggle('is-disabled', !randomMode);
-  if (!randomMode) {
+  const pickMode = mode === 'random' || mode === 'weighted';
+  countInput.disabled = !pickMode;
+  countInput.title = pickMode ? '' : '选择「全部会话」时 N 不生效';
+  countInput.closest('.field')?.classList.toggle('is-disabled', !pickMode);
+  // 只有 weighted 依赖决策模型的判定结果：规则没选「决策模型判定」时给加粗变红的建议。
+  const rule = state.rules.find((item) => item.id === $('#binding-rule').value);
+  const byDecision = mode === 'weighted' && rule?.intent?.mode === 'decision';
+  warning?.classList.toggle('hidden', mode !== 'weighted' || byDecision);
+  if (!pickMode) {
     hint.textContent = `当前 ${targets.length} 个目标会话，每次触发全部处理（按列表顺序），N 不生效。`;
     return;
   }
   const effective = targets.length ? Math.min(count, targets.length) : count;
-  hint.textContent = `当前 ${targets.length} 个目标会话，每次触发随机挑 ${effective} 个，按挑选顺序依次走「拦截 → 意向 → 投递」。`;
+  if (mode === 'random') {
+    hint.textContent = `当前 ${targets.length} 个目标会话，每次触发随机挑 ${effective} 个，按挑选顺序依次走「拦截 → 意向 → 投递」。`;
+    return;
+  }
+  // 说明只讲策略本身；规则机制不匹配的提示在第 3 步「规则配置」下面的加粗红字里。
+  hint.textContent = `当前 ${targets.length} 个目标会话，每次触发按关注度加权挑 ${effective} 个，关注度高的先走「拦截 → 意向 → 投递」。`;
 }
 
 function parseTargets() {
@@ -297,8 +321,9 @@ async function saveBinding() {
     // 后端才是权威：会话冲突、规则不存在等都以它的报文为准，弹窗保持打开。
     toast(error.message || '保存失败', true);
   } finally {
-    button.disabled = false;
+    // 弹窗还开着就由统一函数重算按钮状态，别在这里直接解禁运行中的绑定。
     if (state.editingBinding) renderTargetConflicts();
+    else button.disabled = false;
   }
 }
 
@@ -354,7 +379,11 @@ document.addEventListener('change', (event) => {
   ) {
     renderSelectionHint();
   }
-  if (event.target.id === 'binding-rule') renderTargetConflicts();
+  if (event.target.id === 'binding-rule') {
+    renderTargetConflicts();
+    // 换规则会改变「关注度会不会更新」的说明，提示必须跟着重算。
+    renderSelectionHint();
+  }
 });
 
 export const actions = {

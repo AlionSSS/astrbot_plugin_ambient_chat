@@ -14,6 +14,7 @@ from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
 from astrbot_plugin_ambient_chat.main import AmbientChatPlugin, AmbientSessionFilter
 from astrbot_plugin_ambient_chat.rules.models import RuleError
 from astrbot_plugin_ambient_chat.rules.store import RuleStore
+from astrbot_plugin_ambient_chat.runtime.attention import AttentionStore
 from astrbot_plugin_ambient_chat.runtime.binding_lifecycle import BindingLifecycle
 from astrbot_plugin_ambient_chat.runtime.configuration import ConfigurationApplication
 from astrbot_plugin_ambient_chat.runtime.execution import SpeechExecution
@@ -97,6 +98,8 @@ class Runtime:
         self.context = SimpleNamespace(message_history_manager=self.history)
         self.buffer = ContextBuffer(media=MediaStore(path / "media"))
         self.blockers = BlockerChain(self.buffer)
+        # 关注度落在与 settings.json 相同的数据目录，测试里就是临时的 path。
+        self.attention = AttentionStore(path)
         self.router = SimpleNamespace(reload=AsyncMock())
         self.judge = SimpleNamespace(
             judge=AsyncMock(return_value=IntentResult(True)),

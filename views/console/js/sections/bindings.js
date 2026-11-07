@@ -62,7 +62,8 @@ export function blankBinding() {
     rule_id: state.rules[0]?.id || '',
     name: '',
     targets: [],
-    selection: { mode: 'random', count: 3 },
+    // 新建默认按关注度挑：同样的名额，比等概率随机更聪明（ADR-0034）。
+    selection: { mode: 'weighted', count: 3 },
     // 新建即停止：启停只在「运行管理」页操作，见 ADR-0015。
     enabled: false,
   };

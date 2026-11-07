@@ -731,6 +731,15 @@ code {
   font-size: 15px;
 }
 
+/* 绑定弹窗：标题后紧跟一句说明，与标题同一行；窄屏放不下时整行折下去。 */
+#binding-modal .modal-head {
+  flex-wrap: wrap;
+}
+
+#binding-modal .modal-head .hint {
+  margin: 0;
+}
+
 .modal-bot {
   display: flex;
   align-items: baseline;
@@ -900,7 +909,12 @@ textarea {
   color: var(--danger);
 }
 
-/* 入口触发的星期多选与「已过期」标记 */
+/* 加权挑选配了「按概率放行」的规则时，这句建议要加粗变红以显眼。 */
+#selection-rule-warning strong {
+  font-weight: 700;
+}
+
+/* 触发入口的星期多选与「已过期」标记 */
 .day-picker {
   display: flex;
   flex-wrap: wrap;
@@ -941,59 +955,9 @@ textarea {
   margin-bottom: 8px;
 }
 
-/* -------------------------------------------------------------- 配置流程 */
-.flow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: 10px;
-  list-style: none;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
-  background: var(--panel-soft);
-}
-
-.flow li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1 1 150px;
-  min-width: 0;
-}
-
-.flow li b {
-  flex: none;
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.flow-text {
-  display: block;
-  min-width: 0;
-  line-height: 1.35;
-}
-
-.flow-text strong {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.flow-text em {
-  display: block;
-  font-style: normal;
-  font-size: 11px;
-  color: var(--muted);
+/* 规则弹窗去掉顶部流程引导后，第一个标题不必再留大段上边距。 */
+#rule-editor > h2:first-child {
+  margin-top: 4px;
 }
 
 .step {
@@ -1521,6 +1485,11 @@ input[type="password"]::-ms-clear {
   color: var(--danger);
   flex: 1 1 240px;
   word-break: break-word;
+}
+
+/* 关注度与观测次数保持一整行，别被挤到第二行和时刻混在一起 */
+.target-rows .attention {
+  white-space: nowrap;
 }
 
 /* 每行会话自己的「缓冲区」入口：行内按钮，压缩内边距免得把行撑高 */

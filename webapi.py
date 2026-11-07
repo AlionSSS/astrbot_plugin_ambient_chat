@@ -102,7 +102,13 @@ class AmbientWebApi:
                 f"{ROUTE_PREFIX}/bindings/trigger",
                 self.trigger_binding_target,
                 ["POST"],
-                "对一个目标会话立即手动触发一次（跳过入口触发与挑选策略）",
+                "对一个目标会话立即手动触发一次（跳过触发入口与挑选策略）",
+            ),
+            (
+                f"{ROUTE_PREFIX}/bindings/attention/reset",
+                self.reset_binding_attention,
+                ["POST"],
+                "清空该绑定目标会话的关注度（回到先验值）",
             ),
             (
                 f"{ROUTE_PREFIX}/settings/save",
@@ -404,7 +410,7 @@ class AmbientWebApi:
         )
 
     async def trigger_binding_target(self) -> Any:
-        """手动触发一个目标会话：只跳过入口触发与挑选，判断链路与定时触发一致。"""
+        """手动触发一个目标会话：只跳过触发入口与挑选，判断链路与定时触发一致。"""
         payload = await request.json(default={})
         payload = payload if isinstance(payload, dict) else {}
         binding_id = str(payload.get("binding_id") or "").strip()
@@ -416,6 +422,26 @@ class AmbientWebApi:
         except RuleError as exc:
             return error_response(str(exc), status_code=400)
         return json_response(result)
+
+    async def reset_binding_attention(self) -> Any:
+        """重置关注度：运行期画像而非配置，因此不跟随绑定启停的只读限制。"""
+        payload = await request.json(default={})
+        payload = payload if isinstance(payload, dict) else {}
+        binding_id = str(payload.get("binding_id") or "").strip()
+        if not binding_id:
+            return error_response("缺少 binding_id", status_code=400)
+        binding = self._plugin.store.bindings.get(binding_id)
+        if binding is None:
+            return error_response(f"绑定不存在：{binding_id}", status_code=404)
+        attention = self._plugin.attention
+        attention.reset(binding.targets)
+        return json_response(
+            {
+                "binding_id": binding_id,
+                "reset": True,
+                "attention": {umo: attention.detail(umo) for umo in binding.targets},
+            }
+        )
 
     async def save_settings(self) -> Any:
         payload = await request.json(default={})

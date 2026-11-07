@@ -70,8 +70,8 @@ DEFAULT_WINDOW_GAP_MINUTES = 1
 """时段随机里任意两次触发的最小间隔（分钟）。"""
 MAX_WINDOW_GAP_MINUTES = 720
 
-DEFAULT_INTERVAL_MINUTES = 60
-"""固定间隔触发的默认周期（分钟）。"""
+DEFAULT_INTERVAL_MINUTES = 30
+"""固定间隔触发的默认周期（分钟）；与「新建规则」弹窗的默认值保持一致。"""
 MAX_INTERVAL_MINUTES = 24 * 60
 DEFAULT_INTERVAL_JITTER = 15
 """固定间隔触发的默认抖动百分比（±周期 * 比例），让节奏不像闹钟。"""
@@ -81,9 +81,12 @@ SELECTION_ALL = "all"
 """每次触发都覆盖绑定的全部目标会话。"""
 
 SELECTION_RANDOM = "random"
-"""每次触发随机挑选 N 个目标会话，按挑选顺序依次触发。"""
+"""每次触发等概率随机挑选 N 个目标会话，按挑选顺序依次触发。"""
 
-SELECTION_MODES = (SELECTION_ALL, SELECTION_RANDOM)
+SELECTION_WEIGHTED = "weighted"
+"""按关注度加权随机挑选 N 个目标会话，按关注度从高到低依次触发（ADR-0034）。"""
+
+SELECTION_MODES = (SELECTION_ALL, SELECTION_RANDOM, SELECTION_WEIGHTED)
 
 MIN_CONCURRENCY = 1
 MAX_CONCURRENCY = 5
@@ -393,7 +396,7 @@ class Settings:
 # ---------------------------------------------------------------------- 规则
 @dataclass(slots=True)
 class Trigger:
-    """一个入口触发条件。
+    """一个触发入口条件。
 
     - ``cron``：crontab 表达式，按分钟粒度重复；
     - ``once``：一次性时刻，过去时刻允许保存，但会被标成「已过期」且永不触发；
@@ -448,10 +451,10 @@ class Trigger:
         """``strict=False`` 用于读盘：历史数据里的窗口可能塞不下最小间隔，
         此时把间隔降到可行值，而不是让整条规则被跳过。"""
         if not isinstance(raw, dict):
-            raise RuleError("入口触发必须是对象")
+            raise RuleError("触发入口必须是对象")
         trigger_type = str(raw.get("type") or "").strip()
         if trigger_type not in TRIGGER_TYPES:
-            raise RuleError(f"未知的入口触发类型：{trigger_type}")
+            raise RuleError(f"未知的触发入口类型：{trigger_type}")
 
         if trigger_type == TRIGGER_CRON:
             expr = str(raw.get("expr") or "").strip()
@@ -645,7 +648,7 @@ class Rule:
 
         triggers_raw = raw.get("triggers") or []
         if not isinstance(triggers_raw, list) or not triggers_raw:
-            raise RuleError("至少需要一个入口触发")
+            raise RuleError("至少需要一个触发入口")
         triggers = [Trigger.parse(item, tz, strict=strict) for item in triggers_raw]
 
         try:

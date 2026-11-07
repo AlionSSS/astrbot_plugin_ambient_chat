@@ -46,7 +46,7 @@ function ruleRow(rule) {
     <span class="rule-name">${escapeHtml(rule.name)}</span>
     <span class="rule-meta">
       <span>${bound} 条绑定</span><span class="sep">·</span>
-      <span>${triggers} 个入口触发</span><span class="sep">·</span>
+      <span>${triggers} 个触发入口</span><span class="sep">·</span>
       ${expiredText}
       <span>${escapeHtml(ruleUpdatedText(rule))}</span>
     </span>
@@ -141,17 +141,45 @@ function renderRuleModal() {
   fillProviderSelect(
     document.querySelector('#rule-editor [data-path="chat_provider_id"]'),
     state.meta.chat_providers,
-    '使用会话默认模型',
+    '使用 AstrBot 会话默认模型',
   );
   fillProviderSelect(
     document.querySelector('#rule-editor [data-path="intent.decision_provider_id"]'),
     state.meta.decision_providers,
-    '使用默认判断模型',
+    '使用 AstrBot 默认判断模型',
   );
 
   renderTriggers();
   renderBlockers();
   syncIntentFields();
+}
+
+/**
+ * 选「使用 AstrBot 默认判断模型」时，`DecisionRouter` 会取官方判断提供商列表的第 0 个；
+ * 一个都没配置，判定会直接失败（按设计静默不发言）。「更多设置」里的自定义模型不算，
+ * 因为它不在 AstrBot 的提供商配置里，必须在下拉里显式选中才生效。
+ */
+function defaultDecisionProviderUnavailable() {
+  const mode = document.querySelector('#rule-editor [data-path="intent.mode"]')?.value;
+  const selected = document.querySelector(
+    '#rule-editor [data-path="intent.decision_provider_id"]',
+  )?.value;
+  const hasOfficial = (state.meta?.decision_providers || []).some(
+    (item) => item.source === 'official',
+  );
+  return mode === 'decision' && !selected && !hasOfficial;
+}
+
+/** 红字提示 + 禁用保存：这条规则存下去也只会一直判定失败。 */
+function syncDecisionProviderWarning() {
+  const blocked = defaultDecisionProviderUnavailable();
+  $('#decision-provider-warning')?.classList.toggle('hidden', !blocked);
+  const button = $('#btn-save-rule');
+  if (!button) return;
+  button.disabled = blocked;
+  button.title = blocked
+    ? 'AstrBot 未配置判断提供商，请先配置或改用自定义决策模型'
+    : '';
 }
 
 function syncIntentFields() {
@@ -181,6 +209,7 @@ function syncIntentFields() {
       : '当前为按概率放行：只要通过第 2 步「拦截」，就按设定概率决定是否发言；' +
         '放行概率填 100 等于每次都发言，填 0 等于从不发言，决策模型不参与判断。';
   }
+  syncDecisionProviderWarning();
 }
 
 function fillProviderSelect(select, providers, emptyLabel) {
@@ -261,7 +290,7 @@ function triggerParams(trigger, index) {
   if (trigger.type === 'interval') {
     return `<div class="grid">
       <label class="field"><span>每隔多少分钟</span>
-        <input type="number" min="1" max="1440" data-path="triggers.${index}.every_minutes" value="${Number(trigger.every_minutes) || 60}" /></label>
+        <input type="number" min="1" max="1440" data-path="triggers.${index}.every_minutes" value="${Number(trigger.every_minutes) || 30}" /></label>
       <label class="field"><span>抖动比例（±%，0 表示严格等间隔）</span>
         <input type="number" min="0" max="60" data-path="triggers.${index}.jitter_percent" value="${Number(trigger.jitter_percent) || 0}" /></label>
     </div>
@@ -381,6 +410,11 @@ async function saveRule() {
     toast('规则名称不能为空', true);
     return;
   }
+  // 按钮已禁用，这里再挡一层：防止绕过按钮触发保存，把跑不起来的配置写进磁盘。
+  if (defaultDecisionProviderUnavailable()) {
+    toast('AstrBot 未配置判断提供商，请先配置或改用自定义决策模型', true);
+    return;
+  }
   const button = $('#btn-save-rule');
   button.disabled = true;
   try {
@@ -390,10 +424,11 @@ async function saveRule() {
     closeRuleModal();
     await finishSaved(data, '规则已保存');
   } catch (error) {
-    // 后端才是权威（名称空、入口触发为空等），弹窗保持打开。
+    // 后端才是权威（名称空、触发入口为空等），弹窗保持打开。
     toast(error.message || '保存失败', true);
   } finally {
-    button.disabled = false;
+    // 不直接置 false：若期间判断提供商被移除，要恢复成禁用状态。
+    syncDecisionProviderWarning();
   }
 }
 
@@ -462,6 +497,10 @@ function handleEditorInput(target) {
     setPath(state.editingRule, target.dataset.path, value);
     state.ruleDirty = true;
     if (target.dataset.path === 'intent.mode') syncIntentFields();
+    // 切换决策模型下拉后立即重算「默认判断模型不可用」的提示与保存按钮状态。
+    if (target.dataset.path === 'intent.decision_provider_id') {
+      syncDecisionProviderWarning();
+    }
     // 手改表达式后让「常用节奏」跟着回到匹配项或「自定义」。
     const exprMatch = /^triggers\.(\d+)\.expr$/.exec(target.dataset.path);
     if (exprMatch) {
@@ -574,7 +613,7 @@ export const actions = {
     renderRuleList();
   },
   'btn-add-trigger': () => {
-    state.editingRule.triggers.push(TRIGGER_DEFAULTS.cron());
+    state.editingRule.triggers.push(TRIGGER_DEFAULTS.interval());
     state.ruleDirty = true;
     renderTriggers();
   },
@@ -593,7 +632,7 @@ export const actions = {
   'data:removeTrigger': (index) => {
     state.editingRule.triggers.splice(Number(index), 1);
     if (!state.editingRule.triggers.length) {
-      state.editingRule.triggers.push(TRIGGER_DEFAULTS.cron());
+      state.editingRule.triggers.push(TRIGGER_DEFAULTS.interval());
     }
     state.ruleDirty = true;
     renderTriggers();

@@ -2,7 +2,9 @@
 
 import asyncio
 import copy
+import sys
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -18,6 +20,7 @@ from astrbot_plugin_ambient_chat.rules.models import (
     Trigger,
 )
 from astrbot_plugin_ambient_chat.rules.store import RuleStore
+from astrbot_plugin_ambient_chat.runtime.attention import AttentionStore
 from astrbot_plugin_ambient_chat.runtime.binding_lifecycle import BindingLifecycle
 from astrbot_plugin_ambient_chat.runtime.configuration import ConfigurationApplication
 from astrbot_plugin_ambient_chat.runtime.execution import SpeechExecution
@@ -31,6 +34,15 @@ from astrbot_plugin_ambient_chat.speech.delivery import (
 )
 from astrbot_plugin_ambient_chat.speech.intent import IntentResult
 
+_ATTENTION_DIR: Path | None = None
+"""当前用例专属的关注度目录：由 autouse fixture 指向 pytest 的 ``tmp_path``。"""
+
+
+@pytest.fixture(autouse=True)
+def attention_data_dir(tmp_path: Path, monkeypatch) -> None:
+    """每个用例一个独立的关注度目录，清理由 pytest 负责，不依赖对象回收。"""
+    monkeypatch.setattr(sys.modules[__name__], "_ATTENTION_DIR", tmp_path / "attention")
+
 
 class Harness:
     def __init__(self, *, send_timeout=60, record_timeout=10):
@@ -42,6 +54,9 @@ class Harness:
         self.timezone = ZoneInfo("UTC")
         self.buffer = ContextBuffer()
         self.blockers = BlockerChain(self.buffer)
+        # 关注度档案写在用例自己的临时目录并关掉延迟写：替身不该碰真实数据目录。
+        assert _ATTENTION_DIR is not None, "attention_data_dir fixture 未生效"
+        self.attention = AttentionStore(_ATTENTION_DIR, save_delay=3600)
         self.account = SimpleNamespace(name_for=AsyncMock(return_value=""))
         self.router = SimpleNamespace(reload=AsyncMock())
         self.gates = {}

@@ -99,6 +99,12 @@ class IntentResult:
     reason: str = ""
     failure: str = ""
     """判定失败分类（见 :data:`FAILURE_DECISION` 等）；未失败时为空串。"""
+    scores: tuple[float, float] | None = None
+    """判定给出的原始概率 ``(感兴趣, 新话题)``，用于累积关注度（ADR-0034）。
+
+    只有决策模型判定成功时才有；按概率放行与判定失败都为空，后者不能当作
+    「不感兴趣」记账，否则一次网络抖动就会拉低这个会话的关注度。
+    """
 
     @property
     def hint(self) -> str:
@@ -106,7 +112,7 @@ class IntentResult:
 
 
 class IntentJudge:
-    """决定「这次到底要不要说话」。"""
+    """「思考要不要发言」：给出这一次是否发言的结论。"""
 
     def __init__(
         self,
@@ -210,11 +216,18 @@ class IntentJudge:
         # 运行管理页的「上次结果」只展示这一个字符串：结论在前，括号里固定
         # 带上两个判定值，落选的那项也能看出打了多少分。
         scores = f"感兴趣 {interested:.2f} / 新话题 {new_topic:.2f}"
+        metric = (interested, new_topic)
         if interested >= threshold:
-            return IntentResult(True, MODE_CONTINUE, f"感兴趣（{scores}）")
+            return IntentResult(
+                True, MODE_CONTINUE, f"感兴趣（{scores}）", scores=metric
+            )
         if new_topic >= threshold:
-            return IntentResult(True, MODE_NEW_TOPIC, f"新话题（{scores}）")
-        return IntentResult(False, MODE_CONTINUE, f"不感兴趣（{scores}）")
+            return IntentResult(
+                True, MODE_NEW_TOPIC, f"新话题（{scores}）", scores=metric
+            )
+        return IntentResult(
+            False, MODE_CONTINUE, f"不感兴趣（{scores}）", scores=metric
+        )
 
     @staticmethod
     def _by_probability(probability: float) -> IntentResult:

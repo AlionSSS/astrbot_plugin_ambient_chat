@@ -32,7 +32,7 @@ export const TRIGGER_DEFAULTS = {
     gap_minutes: 1,
     days: [],
   }),
-  interval: () => ({ type: 'interval', every_minutes: 60, jitter_percent: 15 }),
+  interval: () => ({ type: 'interval', every_minutes: 30, jitter_percent: 15 }),
 };
 
 /**
@@ -63,10 +63,13 @@ export function blankRule() {
   return {
     id: '',
     name: '新规则',
-    triggers: [TRIGGER_DEFAULTS.cron()],
+    // 新建规则默认用固定间隔：每 30 分钟、抖动 ±15%，不依赖 cron 表达式。
+    triggers: [TRIGGER_DEFAULTS.interval()],
     blockers: [BLOCKER_DEFAULTS.silence(), BLOCKER_DEFAULTS.unanswered()],
     intent: {
-      mode: 'direct',
+      // 新建规则默认交给决策模型判定：先看会话值不值得接话，而不是一上来就掷骰子。
+      // 判断提供商留空时取 AstrBot 的默认判断提供商，没配置会在弹窗里直接提示。
+      mode: 'decision',
       decision_provider_id: '',
       threshold: 0.7,
       pass_probability: 1,
@@ -92,7 +95,7 @@ export function normalizeRule(rule) {
         .filter((day) => Number.isInteger(day) && day >= 1 && day <= 7);
     }
     if (trigger.type === 'interval') {
-      trigger.every_minutes = Number(trigger.every_minutes) || 60;
+      trigger.every_minutes = Number(trigger.every_minutes) || 30;
       trigger.jitter_percent = Number(trigger.jitter_percent) || 0;
     }
     return trigger;
@@ -132,7 +135,9 @@ export function platformParts(platformId) {
 }
 
 export function selectionText(selection) {
-  if (!selection || selection.mode !== 'random') return '全部会话';
+  if (!selection) return '全部会话';
+  if (selection.mode === 'weighted') return `按关注度挑 ${selection.count} 个`;
+  if (selection.mode !== 'random') return '全部会话';
   return `随机 ${selection.count} 个`;
 }
 
