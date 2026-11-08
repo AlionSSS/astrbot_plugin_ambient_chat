@@ -54,8 +54,8 @@ class AmbientSessionFilter(filter.CustomFilter):
 @register(
     PLUGIN_NAME,
     "AlionSSS",
-    "让 AI 在群聊与私聊中像真人一样「在场」：按时机、按兴趣决定要不要接话，偶尔主动开个新话题，而不是只能等被点名。",
-    "0.4.6",
+    "让 AI 像人一样自己去「看一眼」聊天：按时机翻关注会话的新内容，按兴趣决定要不要搭句话，而不是只能等被点名。",
+    "0.5.0",
 )
 class AmbientChatPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
