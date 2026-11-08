@@ -390,7 +390,7 @@ function renderBlockers() {
         <label class="field"><span>机器人连续发言条数达到</span>
           <input type="number" min="1" max="100" data-unanswered-count="1" value="${Number(unanswered.count) || 3}" /></label>
         <label class="field"><span>此后无人回应则安静 N 分钟（填极大值即永久）</span>
-          <input type="number" min="1" max="${Number.MAX_SAFE_INTEGER}" data-unanswered-minutes="1" value="${Number(unanswered.minutes) || 180}" /></label>
+          <input type="number" min="1" max="${Number.MAX_SAFE_INTEGER}" data-unanswered-minutes="1" value="${Number(unanswered.minutes) || 300}" /></label>
       </div>
       <p class="hint">从最后一次发言开始计时；期间有人发言立即解除，期满则连发条数重新累计（要再连发同样的条数才会再次等待）</p>` : '<p class="hint">未启用</p>'}
     </div>
@@ -586,7 +586,7 @@ function handleEditorInput(target) {
   if (target.dataset.unansweredMinutes) {
     const blocker = findBlocker(state.editingRule, 'unanswered');
     if (blocker) {
-      blocker.minutes = Number(target.value) || 180;
+      blocker.minutes = Number(target.value) || 300;
       state.ruleDirty = true;
     }
   }

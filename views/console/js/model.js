@@ -11,7 +11,7 @@ export const BLOCKER_DEFAULTS = {
   silence: () => ({ type: 'silence', windows: [{ start: '23:00', end: '09:00' }] }),
   cooldown: () => ({ type: 'cooldown', minutes: 5 }),
   unread: () => ({ type: 'unread', min_count: DEFAULT_UNREAD_MIN_COUNT }),
-  unanswered: () => ({ type: 'unanswered', count: 3, minutes: 180 }),
+  unanswered: () => ({ type: 'unanswered', count: 3, minutes: 300 }),
 };
 
 /** 未读条数允许为 0（等于不拦截），只在缺失或非法时回落到默认值。 */
@@ -106,7 +106,7 @@ export function normalizeRule(rule) {
     if (blocker.type === 'unread') blocker.min_count = unreadMinCount(blocker);
     if (blocker.type === 'unanswered') {
       blocker.count = Number(blocker.count) || 3;
-      blocker.minutes = Number(blocker.minutes) || 180;
+      blocker.minutes = Number(blocker.minutes) || 300;
     }
     return blocker;
   });
