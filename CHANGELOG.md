@@ -1,9 +1,5 @@
 # 更新日志
 
-本文件按版本记录每次 GitHub Release 的发布信息，最新在前。版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)，条目格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
-
-各版本通用的安装要求（AstrBot `>=4.29.4,<5`、`aiocqhttp` 适配器）与平台侧已知限制不逐条重复，详见 [docs/usage.md](docs/usage.md) 与 [docs/limitations.md](docs/limitations.md)。
-
 ## [v0.5.0](https://github.com/AlionSSS/astrbot_plugin_ambient_chat/releases/tag/v0.5.0) - 2026-11-08
 
 这次把「该跟谁说话」从随机变成有记忆：新增按关注度加权挑选目标会话，平时聊得起来的会话更容易被选中；关注度只按新增内容记账，静默会话不会靠同一段旧内容反复加分。README 也重写了开场，讲清「被 @ 才回」与「自己去看一眼」的区别。中间未单独发布的 v0.4.5 / v0.4.6 改动一并包含在本次发布中。
