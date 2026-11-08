@@ -29,6 +29,8 @@
 - 「固定间隔」默认值变化只影响新建规则，已存在的规则不受影响。
 - 本次为次版本号跳变（0.4 → 0.5），功能向后兼容，已有配置无需改动。
 
+---
+
 ## [v0.4.4](https://github.com/AlionSSS/astrbot_plugin_ambient_chat/releases/tag/v0.4.4) - 2026-11-07
 
 这次把自主发言从「一条消息」变成「一段对话」：开启分段拟人发言后，回复会按标点切成几句、隔几秒逐条发出。同时补上可选的语音输入、可调放行概率的意向机制，以及连发退避与决策失败提示的几处修正。中间未单独发布的 v0.4.2 / v0.4.3 改动一并包含在本次发布中。
@@ -55,6 +57,8 @@
 - 配置格式升到 `schema_version: 7`（`6` 增加默认关闭的 `cache_audio`，`7` 增加 `astrbot_config_advice_seen`），旧配置按默认值补齐；降级旧版前请备份 `settings.json`。
 - 旧规则缺少 `pass_probability` 时按 100% 处理，行为与旧版「直接放行」一致，无需迁移；想按概率少说话再自行调低。
 
+---
+
 ## [v0.4.1](https://github.com/AlionSSS/astrbot_plugin_ambient_chat/releases/tag/v0.4.1) - 2026-11-06
 
 图片缓存的代价不再只在首次进入设置页时提示一次：每次勾选开启都会先确认。
@@ -68,6 +72,8 @@
 ### 升级提示
 
 - 配置格式为 `schema_version: 5`，本次无格式变化。
+
+---
 
 ## [v0.4.0](https://github.com/AlionSSS/astrbot_plugin_ambient_chat/releases/tag/v0.4.0) - 2026-11-06
 
