@@ -56,6 +56,29 @@ def test_weight_never_drops_below_floor() -> None:
     assert record.weight == MIN_WEIGHT
 
 
+def test_partial_weight_only_adds_its_share() -> None:
+    """重复判定的同一段内容只按新增占比入账：均值不变，置信度打折（ADR-0035）。"""
+    record = Attention()
+    record.observe(0.9, 0.1, weight=0.25)
+
+    assert record.observations == pytest.approx(0.25)
+    assert record.weight == pytest.approx(
+        (PRIOR_WEIGHT * PRIOR_STRENGTH + 0.9 * 0.25) / (PRIOR_STRENGTH + 0.25)
+    )
+
+
+def test_repeated_observations_at_full_weight_match_one_observation() -> None:
+    """20 次各 0.05 份，与一次满额观测等价——折算的是证据份量，不是分数。"""
+    split = Attention()
+    for _ in range(20):
+        split.observe(0.8, 0.6, weight=0.05)
+    whole = Attention()
+    whole.observe(0.8, 0.6)
+
+    assert split.observations == pytest.approx(whole.observations)
+    assert split.weight == pytest.approx(whole.weight)
+
+
 def test_weighted_sample_returns_requested_count_without_duplicates() -> None:
     items = [f"u{index}" for index in range(6)]
     picked = weighted_sample(items, lambda umo: 0.5, 3, random.Random(7))
@@ -104,6 +127,46 @@ def test_store_round_trips_through_disk(tmp_path: Path) -> None:
         store.weight("aiocqhttp:GroupMessage:1")
     )
     assert reloaded.detail("aiocqhttp:GroupMessage:1")["observations"] == 2
+
+
+def test_zero_weight_observation_does_not_create_record(tmp_path: Path) -> None:
+    """份量为 0 表示这段内容已经记过账：既不累加，也不留空条目。"""
+    store = AttentionStore(tmp_path)
+    umo = "aiocqhttp:GroupMessage:1"
+
+    store.observe(umo, interested=1.0, new_topic=1.0, weight=0.0)
+
+    assert store.detail(umo) == {"weight": PRIOR_WEIGHT, "observations": 0}
+    assert store.snapshot() == {}
+
+
+def test_repeated_decisions_on_unchanged_content_leave_attention_alone(
+    tmp_path: Path,
+) -> None:
+    """静默会话每 5 分钟被再判一次：内容没变，关注度必须一点都不动。"""
+    store = AttentionStore(tmp_path)
+    umo = "aiocqhttp:GroupMessage:1"
+    store.observe(umo, interested=0.9, new_topic=0.9)
+    before = store.detail(umo)
+
+    for _ in range(50):
+        store.observe(umo, interested=0.9, new_topic=0.9, weight=0.0)
+
+    assert store.detail(umo) == before
+
+
+def test_fractional_observations_survive_disk_round_trip(tmp_path: Path) -> None:
+    """观测次数是折算后的浮点量，落盘再读出不能退化成整数。"""
+    store = AttentionStore(tmp_path)
+    umo = "aiocqhttp:GroupMessage:1"
+    store.observe(umo, interested=0.8, new_topic=0.4, weight=0.25)
+    store.flush()
+
+    reloaded = AttentionStore(tmp_path)
+    reloaded.load()
+
+    assert reloaded.detail(umo)["observations"] == pytest.approx(0.25)
+    assert reloaded.weight(umo) == pytest.approx(store.weight(umo))
 
 
 def test_missing_file_is_an_empty_archive(tmp_path: Path) -> None:

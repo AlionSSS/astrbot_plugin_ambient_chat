@@ -3,6 +3,7 @@
  * 这里的函数可以从 `state` 读数据，但不接触 DOM，也不发请求。
  */
 import { state } from './store.js';
+import { kindLabel } from './util.js';
 
 export const DEFAULT_UNREAD_MIN_COUNT = 10;
 
@@ -132,6 +133,23 @@ export function platformParts(platformId) {
   }
   const desc = String(item.display || '').trim();
   return { id: item.id, desc: desc === item.id ? '' : desc };
+}
+
+/**
+ * 目标会话的展示片段：拆成「群聊 / 私聊」与 session_id，便于运行管理页做紧凑标识。
+ * 完整 UMO 由调用方放进 title，不在行内占宽。
+ */
+export function targetParts(umo) {
+  const text = String(umo || '');
+  const firstSep = text.indexOf(':');
+  const secondSep = text.indexOf(':', firstSep + 1);
+  if (firstSep < 0 || secondSep < 0) {
+    return { kind: '会话', session: text || '-' };
+  }
+  return {
+    kind: kindLabel(text.slice(firstSep + 1, secondSep)),
+    session: text.slice(secondSep + 1) || '-',
+  };
 }
 
 export function selectionText(selection) {

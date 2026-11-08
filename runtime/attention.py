@@ -3,6 +3,9 @@
 关注度按目标会话（UMO）记账，与规则、绑定无关：换规则、停止绑定、插件重启都不清零，
 目标从所有绑定里消失时才删除。先验负责冷启动、下限负责防饿死，两者保证它永不为零，
 因此任何目标会话在任何时刻都有非零的入选概率。
+
+观测按内容计价（ADR-0035）：静默会话被反复判定的还是同一段内容，只有新增消息那部分
+算作新证据，因此关注度的变化速度取决于内容增长速度，而不取决于触发频率。
 """
 
 from __future__ import annotations
@@ -44,11 +47,15 @@ _EPSILON = 1e-12
 
 @dataclass(slots=True)
 class Attention:
-    """一个目标会话的账本：两笔原始概率之和 + 共同观测次数。"""
+    """一个目标会话的账本：两笔原始概率之和 + 共同观测次数。
+
+    观测次数是**折算后**的有效量，不是判定次数：一次判定里只有没记过账的那部分
+    内容算数（ADR-0035），所以它是浮点数。
+    """
 
     interested_sum: float = 0.0
     new_topic_sum: float = 0.0
-    observations: int = 0
+    observations: float = 0.0
 
     @property
     def weight(self) -> float:
@@ -65,16 +72,24 @@ class Attention:
         value = numerator / (PRIOR_STRENGTH + self.observations)
         return max(MIN_WEIGHT, min(1.0, value))
 
-    def observe(self, interested: float, new_topic: float) -> None:
-        self.interested_sum += _clamp(interested)
-        self.new_topic_sum += _clamp(new_topic)
-        self.observations += 1
+    def observe(self, interested: float, new_topic: float, weight: float = 1.0) -> None:
+        """记账一笔；``weight`` 是这份证据的份量（0~1）。
+
+        两笔账与观测次数同时乘以 ``weight``，均值不变、置信度按新内容打折：
+        「这段内容已经看过」不等于「这段内容不感兴趣」，所以不能记成 0 分。
+        """
+        weight = _clamp(weight)
+        if weight <= 0.0:
+            return
+        self.interested_sum += _clamp(interested) * weight
+        self.new_topic_sum += _clamp(new_topic) * weight
+        self.observations += weight
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "interested_sum": round(self.interested_sum, 4),
             "new_topic_sum": round(self.new_topic_sum, 4),
-            "observations": self.observations,
+            "observations": round(self.observations, 4),
         }
 
     @classmethod
@@ -85,10 +100,11 @@ class Attention:
         try:
             interested = float(raw.get("interested_sum", 0.0) or 0.0)
             new_topic = float(raw.get("new_topic_sum", 0.0) or 0.0)
-            observations = int(raw.get("observations", 0) or 0)
+            # 旧档案里是整数次数，读成浮点即可；新档案带小数（ADR-0035）。
+            observations = float(raw.get("observations", 0.0) or 0.0)
         except (TypeError, ValueError, OverflowError):
             return None
-        if not all(map(math.isfinite, (interested, new_topic))):
+        if not all(map(math.isfinite, (interested, new_topic, observations))):
             return None
         if interested < 0 or new_topic < 0 or observations < 0:
             return None
@@ -165,23 +181,43 @@ class AttentionStore:
         return record.weight if record is not None else PRIOR_WEIGHT
 
     def detail(self, umo: str) -> dict[str, Any]:
-        """页面展示用：关注度（两位小数）与观测次数。"""
+        """页面展示用：关注度（两位小数）与折算后的观测次数。
+
+        观测次数保留两位小数：静默会话攒一次新内容可能只有 0.05 份，四舍五入到
+        整数会让页面显示成「尚无观测」，与关注度已经变化的事实矛盾。
+        """
         record = self._records.get(umo)
         if record is None:
-            return {"weight": PRIOR_WEIGHT, "observations": 0}
-        return {"weight": round(record.weight, 2), "observations": record.observations}
+            return {"weight": PRIOR_WEIGHT, "observations": 0.0}
+        return {
+            "weight": round(record.weight, 2),
+            "observations": round(record.observations, 2),
+        }
 
-    def observe(self, umo: str, *, interested: float, new_topic: float) -> None:
-        """记一次判定：两笔账同时累加（一次请求同时给出两个概率）。"""
+    def observe(
+        self,
+        umo: str,
+        *,
+        interested: float,
+        new_topic: float,
+        weight: float = 1.0,
+    ) -> None:
+        """记一次判定：两笔账同时累加（一次请求同时给出两个概率）。
+
+        ``weight`` 是这次判定的有效证据量（0~1，见 ADR-0035）。为 0 表示这段内容
+        之前已经记过账，此时既不累加也不建条目——「重复判定」不能变成「重复叙事」。
+        """
         if self._closed:
             return
         if not math.isfinite(interested) or not math.isfinite(new_topic):
+            return
+        if not math.isfinite(weight) or weight <= 0.0:
             return
         record = self._records.get(umo)
         if record is None:
             record = Attention()
             self._records[umo] = record
-        record.observe(interested, new_topic)
+        record.observe(interested, new_topic, weight)
         self._mark_dirty()
 
     def reset(self, umos: Iterable[str]) -> None:

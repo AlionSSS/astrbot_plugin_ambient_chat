@@ -73,6 +73,14 @@ class ContextBuffer:
         """冷却与未读基线独立于消息容量；按发送者计数以支持事后过滤。"""
         self._session_names: dict[str, str] = {}
         """会话的可读名称（群名），来自运行期事件，供判定请求的 scene 使用。"""
+        self._judged_upto: dict[str, ChatMessage] = {}
+        """每个会话最近一次**成功判定并记账**到的最后一条消息（对象引用）。
+
+        关注度只按新内容记账（ADR-0035）：下次判定用这条引用划出「已经记过账」
+        的后缀，只对新增部分折算观测权重。存引用而不是时间戳，是因为私聊预热的
+        条目时间戳为 0（ADR-0020）无法比较先后；引用被缓冲区淘汰后自然失配，
+        此时全部内容都算新增，方向是保守的（宁可多记一次，也不漏记）。
+        启动预热发布的历史也直接压在这里：那是历史，不算启动后的新内容。"""
         self._ignored_senders: frozenset[str] = frozenset()
         """「更多设置」里过滤的发送者 ID：其消息既不进缓冲，也不参与预热。"""
         self._media = media or MediaStore()
@@ -137,7 +145,7 @@ class ContextBuffer:
                 continue
             for message in buffer:
                 if self._is_ignored(message):
-                    self._discard(message)
+                    self._discard(umo, message)
             self._buffers[umo] = deque(kept, maxlen=self._maxlen)
             removed += len(buffer) - len(kept)
         logger.info(
@@ -182,7 +190,7 @@ class ContextBuffer:
         for umo, buffer in list(self._buffers.items()):
             messages = list(buffer)
             for message in messages[:-size]:
-                self._discard(message)
+                self._discard(umo, message)
             self._buffers[umo] = deque(messages[-size:], maxlen=size)
         logger.info("[Ambient] 上下文缓冲容量已调整为 %d 条/会话。", size)
 
@@ -206,7 +214,7 @@ class ContextBuffer:
             and last.text == message.text
         ):
             return
-        self._push(buffer, message)
+        self._push(umo, buffer, message)
         self._adopt_private_name(umo, buffer, message)
         self._activity.setdefault(umo, _Activity()).record(message)
         self._trim_media(buffer)
@@ -358,13 +366,17 @@ class ContextBuffer:
         with self._borrow(paths) as borrowed:
             yield borrowed
 
-    def _push(self, buffer: deque[ChatMessage], message: ChatMessage) -> None:
+    def _push(self, umo: str, buffer: deque[ChatMessage], message: ChatMessage) -> None:
         """写入缓冲，被挤出的消息连同磁盘媒体一起清掉。"""
         while len(buffer) >= self._maxlen:
-            self._discard(buffer.popleft())
+            self._discard(umo, buffer.popleft())
         buffer.append(message)
 
-    def _discard(self, message: ChatMessage) -> None:
+    def _discard(self, umo: str, message: ChatMessage) -> None:
+        """消息离开缓冲：释放媒体；它若还是记账标记就一起作废。"""
+        if self._judged_upto.get(umo) is message:
+            # 留着只会拖住一个已无媒体的对象，而且再也匹配不上任何缓冲内容。
+            del self._judged_upto[umo]
         self._cancel_capture(message)
         self._cancel_audio_capture(message)
         self._release_media(message.images)
@@ -425,6 +437,30 @@ class ContextBuffer:
         size = max(1, int(count))
         return list(buffer)[-size:]
 
+    def fresh_count(self, umo: str, messages: Sequence[ChatMessage]) -> int:
+        """``messages`` 里还没被判定记账过的条数。
+
+        要求 ``messages`` 是止于缓冲区尾部的连续切片（``recent()`` 及其尾部截取）：
+        切片里标记之后的部分才是新增。标记不在切片里（被挤出缓冲、整块预热替换，
+        或窗口已经整体滑过标记）时无法分新旧，按全部新增算——方向保守。
+        """
+        marker = self._judged_upto.get(umo)
+        if marker is None:
+            return len(messages)
+        for index, message in enumerate(messages):
+            if message is marker:
+                return len(messages) - index - 1
+        return len(messages)
+
+    def mark_judged(self, umo: str, messages: Sequence[ChatMessage]) -> None:
+        """记下这次判定已经记账到的最后一条消息（ADR-0035）。
+
+        只在判定真正拿到结果并记账后调用：判定失败时这些内容仍算「新内容」，
+        下次重试还能作为一份证据入账，不会因为一次网络抖动被永久吞掉。
+        """
+        if messages:
+            self._judged_upto[umo] = messages[-1]
+
     def known_name(self, umo: str, sender_id: str) -> str:
         """该发送者在缓冲里最近一次的可读昵称；只记得数字 ID 时返回空串。"""
         if not sender_id:
@@ -479,8 +515,10 @@ class ContextBuffer:
         buffer = self._buffers.pop(umo, None)
         self._activity.pop(umo, None)
         self._session_names.pop(umo, None)
+        # 缓冲换了一批消息，旧的记账标记不再指向任何一条现存消息。
+        self._judged_upto.pop(umo, None)
         for message in buffer or ():
-            self._discard(message)
+            self._discard(umo, message)
 
     def clear_all(self) -> None:
         """清空所有会话的缓冲（含磁盘媒体）：全局开关关闭、重新开启前调用。"""
@@ -639,8 +677,13 @@ class ContextBuffer:
             for message in messages:
                 activity.record(message)
             self._activity[umo] = activity
-            self._buffers[umo] = deque(messages[-self._maxlen :], maxlen=self._maxlen)
-            filled += len(self._buffers[umo])
+            buffer = deque(messages[-self._maxlen :], maxlen=self._maxlen)
+            self._buffers[umo] = buffer
+            # 预热进来的是历史，不是这次启动之后产生的新内容：标记先压在尾条目上，
+            # 启动后的第一次判定只对之后的新消息记账（ADR-0035）。否则每次启停绑定
+            # 都会把整窗历史再记一遍满额账，关注度就重新变成「重启次数」的函数。
+            self._judged_upto[umo] = buffer[-1]
+            filled += len(buffer)
             sessions += 1
             logger.info("[Ambient] 已预热 %s：%d 条历史消息", umo, len(messages))
         if sessions:

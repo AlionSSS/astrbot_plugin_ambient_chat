@@ -11,6 +11,8 @@
   --danger-soft: #ffecec;
   --ok: #1f9d63;
   --ok-soft: #e6f6ee;
+  --warn: #a8700a;
+  --warn-soft: #fdf3e0;
   --sidebar: #ffffff;
 }
 
@@ -27,6 +29,8 @@
   --danger-soft: #3a2325;
   --ok: #52d29b;
   --ok-soft: #1e2f28;
+  --warn: #e2b04a;
+  --warn-soft: #332a17;
   --sidebar: #1c2025;
 }
 
@@ -806,10 +810,18 @@ code {
 }
 
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
   color: var(--muted);
   padding: 44px;
   text-align: center;
   border-style: dashed;
+}
+
+.empty p {
+  margin: 0;
 }
 
 .panel + .panel {
@@ -1366,10 +1378,120 @@ input[type="password"]::-ms-clear {
 }
 
 /* ------------------------------------------------------------------ 运行状态 */
+/* 顶部总览条：计数 + 筛选 + 刷新时间，先给结论再给明细 */
+.status-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-counts {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.summary-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.summary-item b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-item b.ok {
+  color: var(--ok);
+}
+
+.summary-item b.pending {
+  color: var(--accent);
+}
+
+.status-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.filter-chip {
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.filter-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.status-refreshed {
+  white-space: nowrap;
+}
+
 .status-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* 同机器人应用的多条绑定归到一组，顺序与后端一致 */
+.status-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-group:first-child {
+  margin-top: 0;
+}
+
+.status-group .bot-id {
+  font-size: 13px;
+}
+
+.status-group .bot-desc {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.status-group em {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
 }
 
 .status-card {
@@ -1379,37 +1501,66 @@ input[type="password"]::-ms-clear {
   padding: 14px 16px;
 }
 
+
+/* 停止态不换底色（暗色下和页面背景几乎同色），只在左侧压一条灰线 */
+.status-card.is-stopped {
+  box-shadow: inset 3px 0 0 var(--line);
+}
+
+.status-card.is-stopped .binding-name {
+  color: var(--muted);
+}
+
 .status-card > header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 8px 16px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line);
 }
 
 .status-card .route {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.status-card .binding-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* 副行：机器人 → 规则 · 挑选策略 · 目标数，字号降一级让绑定名先被看到 */
+.route-sub {
+  display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  font-size: 14px;
+  gap: 2px 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.route-sub .bot-id {
+  color: var(--text);
+  font-size: 12px;
   font-weight: 600;
 }
 
-.status-card .route .bot-id {
-  font-size: 15px;
-}
-
-.status-card .route .bot-desc {
-  max-width: 260px;
-  font-weight: 400;
-}
-
-.route-sep {
+.route-sep,
+.route-dot {
   color: var(--muted);
-  font-weight: 400;
+}
+
+.route-dot {
+  opacity: 0.6;
 }
 
 .status-actions {
@@ -1417,85 +1568,244 @@ input[type="password"]::-ms-clear {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+  margin-left: auto;
 }
 
-.status-card.stopped {
-  background: var(--panel-soft);
+/* 状态 pill 与启停按钮同组：一眼看到「现在什么状态、点哪个键」 */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px;
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.status-pill::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill.pending {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pill.warn {
+  border-color: transparent;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-pill.pending::before {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.25;
+  }
 }
 
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
-  margin: 12px 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: 6px 16px;
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel-soft);
 }
 
 .status-grid > div {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 12px;
+  gap: 1px;
+  min-width: 0;
 }
 
 .status-grid span {
   color: var(--muted);
+  font-size: 11px;
 }
 
 .status-grid b {
-  font-weight: 500;
   font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
+.status-grid .countdown {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+/* 结果 tone 与目标行共用：失败红、需注意橙、执行中主色 */
+.status-grid b.is-failed,
+.target-result.is-failed {
+  color: var(--danger);
+}
+
+.status-grid b.is-warning,
+.target-result.is-warning {
+  color: var(--warn);
+}
+
+.status-grid b.is-active,
+.target-result.is-active {
+  color: var(--accent);
+}
+
+/* 会话明细按「标识 / 结果 / 关注度 / 时刻 / 操作」五列对齐，行间用细线分隔。
+   后三列用固定宽度：每行是独立网格，内容（时刻、观测值）一变就会重算列宽，
+   固定后各行边界一致，也不会被「— → 时刻」撑开。 */
 .target-rows {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   font-size: 12px;
 }
 
 .target-rows li {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.2fr) 180px 14ch auto;
   align-items: center;
-  gap: 10px;
-  padding: 5px 8px;
+  gap: 4px 12px;
+  padding: 7px 4px;
   border-radius: 6px;
+}
+
+.target-rows li + li {
+  border-top: 1px solid var(--line);
+}
+
+.target-rows li:hover {
   background: var(--panel-soft);
-  flex-wrap: wrap;
 }
 
-.target-rows code {
-  background: transparent;
-  padding: 0;
-}
-
-/* 时刻本身即说明入口：悬停出 title，故用 help 光标并靠右 */
-.target-rows em {
-  font-style: normal;
-  color: var(--muted);
-  margin-left: auto;
-  cursor: help;
-}
-
-/* 决策失败要能在扫一眼时和普通「跳过」区分开：用危险色并允许折行显示原因 */
-.target-rows .failed {
-  color: var(--danger);
-  flex: 1 1 240px;
-  word-break: break-word;
-}
-
-/* 关注度与观测次数保持一整行，别被挤到第二行和时刻混在一起 */
-.target-rows .attention {
+.target-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   white-space: nowrap;
 }
 
-/* 每行会话自己的「缓冲区」入口：行内按钮，压缩内边距免得把行撑高 */
-.target-rows .btn {
+.target-id b {
   flex: none;
-  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.target-id code {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.target-result {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* 关注度是会话级长期画像，任何挑选策略下都展示；只给一个小条 + 数字，不抢结果的位置。
+   它独占固定宽度的一列，每行都从列首开始，因此左边缘永远一致。 */
+.target-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.attention {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attention-bar {
+  position: relative;
+  width: 28px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.attention-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.attention.is-empty .attention-bar i {
+  opacity: 0.35;
+}
+
+.attention b {
+  color: var(--text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.attention-note {
+  color: var(--muted);
+}
+
+/* 时刻独立成列，占住「缓冲区」左侧的位置：列宽固定、内容水平居中，
+   「—」与真实时刻都不会把按钮或关注度挤动 */
+.target-time {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.target-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* 行内操作平时压成次要色，指针落在该行或键盘聚焦时才提亮，减少多条会话时的噪声 */
+.target-actions .btn {
+  flex: none;
+  padding: 3px 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.target-rows li:hover .target-actions .btn,
+.target-actions .btn:focus-visible {
+  color: var(--text);
+}
+
+.target-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
 }
 
 /* -------------------------------------------------------------- 上下文缓冲弹窗 */
@@ -1711,11 +2021,19 @@ input[type="password"]::-ms-clear {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
+    /* 横排时不再保留侧栏的最小高度，否则导航下面会空出一大块 */
+    min-height: 0;
   }
 
   .nav {
+    flex: 1 1 320px;
     flex-direction: row;
     flex-wrap: wrap;
+  }
+
+  /* 横排导航时不要再按侧栏的整行宽度铺开，否则每项各占一行 */
+  .nav-item {
+    width: auto;
   }
 
   /* 窄屏：小节标题与开关允许换行，保存条的说明与按钮也各占一行 */
@@ -1774,5 +2092,89 @@ input[type="password"]::-ms-clear {
   .buffer-messages .buffer-text {
     grid-column: 1 / -1;
     grid-row: 2;
+  }
+}
+
+/* ------------------------------------------------------------ 运行管理窄屏 */
+@media (max-width: 900px) {
+  /* 导语在宽屏是单行省略，窄屏放开换行，别把「每 10 秒自动刷新」截掉 */
+  .section-lead {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .status-filters {
+    margin-left: 0;
+  }
+}
+
+/* 侧边栏收掉前内容区仍被挤到 700px 上下：会话明细提前收成两行，别把结果压成两行 */
+@media (max-width: 1250px) {
+  .target-rows li {
+    /* 第一行仍放「标识 + 时刻 + 操作」，时刻保持在按钮左侧且列宽固定 */
+    grid-template-columns: minmax(0, 1fr) 14ch auto;
+    row-gap: 2px;
+  }
+
+  .target-id {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .target-time {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .target-actions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .target-result {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  /* 关注度与时刻左边缘对齐，占满右侧剩余宽度 */
+  .target-meta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 600px) {
+  .status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 超窄屏保留「标识 + 操作」一行，右侧列按按钮实际宽度收窄 */
+  .target-rows li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  /* 状态与动作在窄屏各占一行，按钮从左排，避免被挤到标题右侧 */
+  .status-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  /* 超窄屏：结果与关注度各占一整行，避免和操作按钮抢宽度 */
+  .target-result {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .target-meta {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}
+
+/* 关掉动效时状态灯的脉冲也要停 */
+@media (prefers-reduced-motion: reduce) {
+  .status-pill.pending::before {
+    animation: none;
   }
 }

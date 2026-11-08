@@ -308,10 +308,14 @@ class SpeechExecution:
             return SpeechResult("skipped", blocked.reason)
         intent = await plugin.judge.judge(rule, umo, plugin.buffer, now)
         # 判定一出就记账（ADR-0034）：之后的拦截、生成失败都不改变「有多想说话」这个事实，
-        # 记账也不该等发送结果，否则关注度会退化成「发送成功率」。
+        # 记账也不该等发送结果，否则关注度会退化成「发送成功率」。份量按新增内容折算
+        # （ADR-0035）：静默会话每次判定的还是同一段内容，不该按整份证据再记一次。
         if intent.scores is not None:
             plugin.attention.observe(
-                umo, interested=intent.scores[0], new_topic=intent.scores[1]
+                umo,
+                interested=intent.scores[0],
+                new_topic=intent.scores[1],
+                weight=intent.fresh_ratio,
             )
         if not intent.speak:
             # 判定失败不是「不想说话」：单独的 state 让页面标红并提示排查方向。

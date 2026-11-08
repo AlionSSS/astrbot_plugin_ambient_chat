@@ -8,7 +8,7 @@ from __future__ import annotations
 import inspect
 import json
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from datetime import tzinfo as _tzinfo
@@ -105,6 +105,13 @@ class IntentResult:
     只有决策模型判定成功时才有；按概率放行与判定失败都为空，后者不能当作
     「不感兴趣」记账，否则一次网络抖动就会拉低这个会话的关注度。
     """
+    fresh_ratio: float = 0.0
+    """本次判定里「没记过账」的消息占比，用来折算关注度的观测权重（ADR-0035）。
+
+    比例按**真正进入请求**的条数算：被字符预算裁掉的旧消息没有参与判定，不能进
+    分母。为 0 表示这段内容已经记过账，重复判定不应再改变关注度。缺省给 0 而不是
+    1：漏传这份份量时宁可不记账，也不要按整份证据多记一次。
+    """
 
     @property
     def hint(self) -> str:
@@ -154,6 +161,10 @@ class IntentJudge:
         )
         if not conversation:
             return IntentResult(False, MODE_CONTINUE, "上下文为空")
+        # 真正送进请求的是裁剪后的尾部：比例必须在同一段上算，否则被裁掉的旧消息
+        # 会稀释「新增内容」，让重复判定仍然按大半份证据入账（ADR-0035）。
+        used = messages[-len(conversation) :]
+        fresh_ratio = _fresh_ratio(buffer, umo, used)
         prompts = {
             "interested": NoulPrompt(
                 instructions=_build_instructions("interested"),
@@ -210,6 +221,9 @@ class IntentJudge:
                 FAILURE_DECISION,
             )
 
+        # 判定成功才把这段内容记为已记账：失败时下次重试仍算新内容，
+        # 一份证据不会因为一次抖动被永久吞掉（ADR-0035）。
+        buffer.mark_judged(umo, used)
         threshold = rule.intent.threshold
         interested = probabilities.get("interested", 0.0)
         new_topic = probabilities.get("want_new_topic", 0.0)
@@ -219,14 +233,26 @@ class IntentJudge:
         metric = (interested, new_topic)
         if interested >= threshold:
             return IntentResult(
-                True, MODE_CONTINUE, f"感兴趣（{scores}）", scores=metric
+                True,
+                MODE_CONTINUE,
+                f"感兴趣（{scores}）",
+                scores=metric,
+                fresh_ratio=fresh_ratio,
             )
         if new_topic >= threshold:
             return IntentResult(
-                True, MODE_NEW_TOPIC, f"新话题（{scores}）", scores=metric
+                True,
+                MODE_NEW_TOPIC,
+                f"新话题（{scores}）",
+                scores=metric,
+                fresh_ratio=fresh_ratio,
             )
         return IntentResult(
-            False, MODE_CONTINUE, f"不感兴趣（{scores}）", scores=metric
+            False,
+            MODE_CONTINUE,
+            f"不感兴趣（{scores}）",
+            scores=metric,
+            fresh_ratio=fresh_ratio,
         )
 
     @staticmethod
@@ -420,6 +446,18 @@ def _brief(exc: BaseException) -> str:
     if len(text) <= REASON_DETAIL_LIMIT:
         return text
     return f"{text[: REASON_DETAIL_LIMIT - 1]}…"
+
+
+def _fresh_ratio(buffer: ContextBuffer, umo: str, used: Sequence[ChatMessage]) -> float:
+    """本次请求的消息里没记过账的占比（ADR-0035）。
+
+    静默会话每次触发都会把同一段内容再判一遍，若按一次完整观测记账，关注度就变成
+    「决策次数」的函数而不是「内容」的函数。折算后等价于「每攒够约一个窗口的新
+    消息才记一次账」，关注度的变化速度与触发间隔解耦。
+    """
+    if not used:
+        return 0.0
+    return buffer.fresh_count(umo, used) / len(used)
 
 
 def _message_entry(
