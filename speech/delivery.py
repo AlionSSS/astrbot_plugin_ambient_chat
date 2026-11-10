@@ -29,7 +29,7 @@ from ..common import (
     resolve_timezone,
 )
 from ..conversation.context_buffer import ContextBuffer
-from ..conversation.messages import SELF_NAME, ChatMessage
+from ..conversation.messages import SELF_NAME, ChatMessage, to_datetime
 from ..rules.models import Settings
 from .segments import is_blocked_platform, split
 
@@ -463,12 +463,24 @@ def build_prompt(
             ContextBuffer.last_peer_name(messages),
             group_name=group_name,
         ),
+        last_message_at=_last_message_at(messages, now.tzinfo or timezone.utc),
     )
     if tag:
         parts.append(tag)
 
     parts.append(hint)
     return "\n\n".join(parts)
+
+
+def _last_message_at(messages: list[ChatMessage], tz: tzinfo) -> datetime | None:
+    """最后一条消息的时间；空列表或时间戳未知（``<=0``）时返回 None。
+
+    时间未知时整行省略而不是猜一个：提醒块里的间隔会直接影响「现在插话是否
+    合适」的判断，宁可少一句，也不给模型一个编造的「刚刚」。
+    """
+    if not messages:
+        return None
+    return to_datetime(messages[-1].timestamp, tz)
 
 
 def _parse_history(raw: Any) -> list[dict]:

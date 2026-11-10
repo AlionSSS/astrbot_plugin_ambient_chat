@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from astrbot_plugin_ambient_chat.common import parse_target
+from astrbot_plugin_ambient_chat.common import format_elapsed, parse_target
 from astrbot_plugin_ambient_chat.conversation.context_buffer import ContextBuffer
 from astrbot_plugin_ambient_chat.conversation.messages import (
     ChatMessage,
@@ -94,8 +94,10 @@ def test_build_prompt_uses_same_render_for_chat_model() -> None:
     )
 
     assert "小明#444066154 (2026-11-03 周二 22:20): 在吗" in prompt
-    # 每条消息已有时间，提醒块不再重复「最后一条消息：约 N 分钟前」。
-    assert "最后一条消息" not in prompt
+    # 提醒块补上距最后一条消息的间隔，模型不用自己把两个时间相减。
+    assert "最后一条消息：2026-11-03 22:20（约 1 分钟前）" in prompt
+    # 星期与记录里的写法一致，不再英文/中文混排。
+    assert "Weekday: 周二" in prompt
     assert "会话类型：群聊" in prompt
     transcript = prompt.split("<recent_conversation>")[1]
     transcript = transcript.split("</recent_conversation>")[0]
@@ -135,8 +137,36 @@ def test_build_prompt_carries_group_name() -> None:
 
     named = build_prompt("接一句", messages, now, group, group_name="复古游戏开发群")
     fallback = build_prompt("接一句", messages, now, group)
-    private_prompt = build_prompt("接一句", messages, now, private, group_name="不该出现")
+    private_prompt = build_prompt(
+        "接一句", messages, now, private, group_name="不该出现"
+    )
 
     assert "会话类型：群聊（群名：复古游戏开发群，群号：1）" in named
     assert "会话类型：群聊（群号：1）" in fallback
     assert "不该出现" not in private_prompt
+
+
+def test_build_prompt_omits_elapsed_when_time_unknown() -> None:
+    """最后一条消息时间未知时省略整行，不编造「刚刚」。"""
+    target = parse_target("aiocqhttp:GroupMessage:1")
+    assert target is not None
+
+    prompt = build_prompt(
+        "接一句",
+        [_message(timestamp=0)],
+        datetime(2026, 11, 3, 22, 21, tzinfo=TZ),
+        target,
+    )
+
+    reminder = prompt.split("<system_reminder>")[1].split("</system_reminder>")[0]
+    assert "最后一条消息" not in reminder
+
+
+def test_format_elapsed_buckets() -> None:
+    """间隔按分钟 / 小时 / 天分档；时钟漂移的负数按「刚刚」。"""
+    assert format_elapsed(timedelta(seconds=-5)) == "刚刚"
+    assert format_elapsed(timedelta(seconds=59)) == "刚刚"
+    assert format_elapsed(timedelta(seconds=60)) == "约 1 分钟前"
+    assert format_elapsed(timedelta(minutes=35)) == "约 35 分钟前"
+    assert format_elapsed(timedelta(hours=3)) == "约 3 小时前"
+    assert format_elapsed(timedelta(days=2, hours=5)) == "约 2 天前"

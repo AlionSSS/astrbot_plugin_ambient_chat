@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PLUGIN_NAME = "astrbot_plugin_ambient_chat"
@@ -96,14 +96,15 @@ def resolve_timezone(name: str | None) -> ZoneInfo:
 
 
 WEEKDAY_NAMES = (
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
+    "周一",
+    "周二",
+    "周三",
+    "周四",
+    "周五",
+    "周六",
+    "周日",
 )
+"""提醒块里的星期写法，与聊天记录里 ``WEEKDAY_ZH`` 的输出保持一致。"""
 
 
 def format_session_line(
@@ -124,16 +125,33 @@ def format_session_line(
     return f"会话类型：私聊（对方：{peer_name or target.session_id}）"
 
 
+def format_elapsed(delta: timedelta) -> str:
+    """把时间差写成口语化间隔；时钟漂移导致的负数按「刚刚」处理。"""
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "刚刚"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"约 {minutes} 分钟前"
+    hours = minutes // 60
+    if hours < 24:
+        return f"约 {hours} 小时前"
+    return f"约 {hours // 24} 天前"
+
+
 def format_reminder(
     now: datetime,
     *,
     include_datetime: bool = True,
     session: str = "",
+    last_message_at: datetime | None = None,
 ) -> str:
     """构造注入给对话模型的 ``<system_reminder>`` 内容块。
 
-    只包含当前日期时间与会话描述；每条聊天记录已经带了自己的时间，
-    不再重复「距最后一条消息多久」。
+    包含当前日期时间、可选「距最后一条消息多久」与会话描述。间隔这一行是给
+    模型判断「现在接话是否合适、该说什么」用的：绝对时间只能说明现在几点，
+    说明不了对话冷了多久；两者都不让它自己相减（``docs/adr/0019``）。
+    ``last_message_at`` 为 ``None`` 表示最后一条消息的时间未知，整行省略，不编造。
     ``include_datetime=False`` 用于核心已经注入了绝对时间、插件不重复注入的场景。
     """
     lines: list[str] = []
@@ -143,6 +161,11 @@ def format_reminder(
         lines.append(
             f"Current datetime: {now.strftime('%Y-%m-%d %H:%M')} ({zone}), "
             f"Weekday: {weekday}"
+        )
+    if last_message_at is not None:
+        lines.append(
+            f"最后一条消息：{last_message_at:%Y-%m-%d %H:%M}"
+            f"（{format_elapsed(now - last_message_at)}）"
         )
     if session:
         lines.append(session)

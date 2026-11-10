@@ -21,7 +21,7 @@
     )
     async with SystemOneClient(config) as client:
         ok = await client.yes_no(
-            "这条消息值得主动插一句吗？",
+            "这条消息值得主动接一句吗？",
             state={"conversation": "..."},
             threshold=0.7,
             default=False,
@@ -30,7 +30,7 @@
     # noul 的 criteria 完全由调用方决定：官方协议里可以省略；
     # 对要求必填的平台（如书生端砚）在调用处显式传入 true/false。
     question = noul(
-        "这条消息值得主动插一句吗？",
+        "这条消息值得主动接一句吗？",
         when_true="有话可说，且此刻接话不突兀",
         when_false="无话可说，或接话会显得突兀",
     )
