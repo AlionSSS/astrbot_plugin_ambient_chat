@@ -67,7 +67,7 @@ function bufferStatsText(session, previewLimit) {
   return `${count}${media}${audio}`;
 }
 
-/** 消息列表：时间 / 发送者名字 / 发送者 ID / 正文四列对齐，按时间正序，最新在底部。 */
+/** 消息列表：时间 / 发言者名字 / 发言者 ID / 正文四列对齐，按时间正序，最新在底部。 */
 function bufferMessagesHtml(session) {
   const rows = session.messages || [];
   if (!rows.length) {
@@ -75,10 +75,10 @@ function bufferMessagesHtml(session) {
   }
   return `<ol class="buffer-messages">${rows
     .map(
-      (message) => `<li class="${message.self ? 'self' : ''}">
+      (message) => `<li class="${message.role === 'assistant' ? 'self' : ''}">
         <span class="buffer-time">${escapeHtml(message.at)}</span>
-        <span class="buffer-sender">${escapeHtml(message.sender_name || '某人')}</span>
-        <span class="buffer-sender-id">${escapeHtml(message.sender_id || '-')}</span>
+        <span class="buffer-role">${escapeHtml(message.role_name || '某人')}</span>
+        <span class="buffer-role-id">${escapeHtml(message.role_id || '-')}</span>
         <span class="buffer-text" title="${escapeHtml(message.text || '（空消息）')}">${escapeHtml(message.text || '（空消息）')}</span>
       </li>`,
     )

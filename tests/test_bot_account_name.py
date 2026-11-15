@@ -196,7 +196,7 @@ def test_bot_message_uses_signature_when_present() -> None:
     message = ChatMessage(sender_name="小助手", text="我在", timestamp=0.0, is_bot=True)
 
     assert message.display_name() == "小助手"
-    assert message.structured_sender_name() == "小助手"
+    assert message.structured_role_name() == "小助手"
     assert message.render(None) == "小助手 (时间未知): 我在"  # type: ignore[arg-type]
 
 
@@ -204,7 +204,25 @@ def test_bot_message_falls_back_to_self_name() -> None:
     message = ChatMessage(sender_name="", text="我在", timestamp=0.0, is_bot=True)
 
     assert message.display_name() == "我"
-    assert message.structured_sender_name() == "我"
+    assert message.structured_role_name() == "我"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (ChatMessage(sender_name="小明", text="", timestamp=0.0, sender_id="1"), "小明"),
+        (ChatMessage(sender_name="", text="", timestamp=0.0, sender_id="1"), "用户#1"),
+        (ChatMessage(sender_name="", text="", timestamp=0.0), "某人"),
+        (ChatMessage(sender_name="小助手", text="", timestamp=0.0, is_bot=True), "小助手"),
+        (ChatMessage(sender_name="", text="", timestamp=0.0, is_bot=True), "我"),
+    ],
+)
+def test_role_name_matches_rendered_name(
+    message: ChatMessage, expected: str
+) -> None:
+    """决策条目的名字与对话侧渲染的名字必须同源：两套兜底判断只留一份。"""
+    assert message.structured_role_name() == expected
+    assert message.display_name() == expected
 
 
 def test_self_name_uses_cached_account_name() -> None:

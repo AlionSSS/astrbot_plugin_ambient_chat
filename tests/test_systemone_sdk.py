@@ -61,14 +61,19 @@ async def test_noul_sends_criteria_true_false() -> None:
         return httpx.Response(200, json=_noul_body())
 
     async with _client(handler) as client:
-        result = await client.yes_no(
-            "这条消息值得接一句吗？",
+        answers = await client.ask(
+            {
+                "answer": noul(
+                    "这条消息值得接一句吗？",
+                    when_true="有话可说且不突兀",
+                    when_false="接话会显得突兀",
+                )
+            },
             state={"conversation": "..."},
-            when_true="有话可说且不突兀",
-            when_false="接话会显得突兀",
         )
 
-    assert result is True
+    # SDK 只回原始概率，阈值判断属于调用方业务。
+    assert answers["answer"].noul == pytest.approx(0.9)
     assert captured["url"] == "https://example.test/v1/systemone"
     assert captured["headers"]["authorization"] == "Bearer sk-test"
     question = captured["payload"]["questions"]["answer"]
@@ -182,14 +187,15 @@ async def test_http_error_detail_is_surfaced() -> None:
 
 
 @pytest.mark.asyncio
-async def test_yes_no_uses_default_on_server_error() -> None:
+async def test_server_error_is_raised_not_swallowed() -> None:
+    """失败兜底是调用方的业务决策，SDK 只把异常抛出去。"""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"detail": "boom"})
 
     async with _client(handler) as client:
-        assert await client.yes_no("是吗？", default=False) is False
         with pytest.raises(SystemOneRequestError):
-            await client.yes_no("是吗？")
+            await client.ask({"answer": noul("是吗？")})
 
 
 @pytest.mark.asyncio

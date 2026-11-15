@@ -1,4 +1,4 @@
-"""「按概率放行」：概率 1.0 等价于旧版直接放行，其余按一次随机数决定。"""
+"""「按概率放行」：概率 1.0 必定放行且不掷随机数，其余按一次随机数决定。"""
 
 import random
 from datetime import datetime
@@ -31,7 +31,7 @@ def _judge() -> IntentJudge:
 
 
 def test_default_probability_is_certain() -> None:
-    """没写该字段的规则（含历史规则）按默认 100% 处理，行为同旧版直接放行。"""
+    """没写该字段的规则（含历史规则）按默认 100% 处理，即必定发言。"""
     rule = Rule.parse(
         {
             "name": "测试规则",
@@ -53,7 +53,7 @@ async def test_certain_probability_always_speaks(monkeypatch: Any) -> None:
     result = await _judge().judge(_rule(1.0), "u", None, NOW)  # type: ignore[arg-type]
 
     assert result.speak
-    assert result.reason == "直接放行"
+    assert result.reason == "按概率放行（100%）"
 
 
 @pytest.mark.asyncio

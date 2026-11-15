@@ -10,9 +10,12 @@
     支持 ``noul`` / ``choice`` / ``score`` 三种问题，``noul`` 可按需带上
     ``criteria``；请求模型与响应模型都由 pydantic 约束。
 
+本 SDK 只做协议适配：不解释概率、不判阈值、不吞异常，也不注入任何业务
+默认文案。概率怎么用、失败怎么兜底，全部由调用方的业务代码决定。
+
 用法::
 
-    from systemone_sdk import SystemOneClient, SystemOneConfig
+    from systemone_sdk import SystemOneClient, SystemOneConfig, noul
 
     config = SystemOneConfig(
         base_url="https://api.typesafe.ai/v1",
@@ -20,12 +23,18 @@
         model="jev-latest",
     )
     async with SystemOneClient(config) as client:
-        ok = await client.yes_no(
-            "这条消息值得主动接一句吗？",
+        answers = await client.ask(
+            {
+                "ok": noul(
+                    "这条消息值得主动接一句吗？",
+                    when_true="有话可说，且此刻接话不突兀",
+                    when_false="无话可说，或接话会显得突兀",
+                )
+            },
             state={"conversation": "..."},
-            threshold=0.7,
-            default=False,
         )
+    # 阈值是业务判断，留在调用方。
+    ok = answers["ok"].noul >= 0.7
 
     # noul 的 criteria 完全由调用方决定：官方协议里可以省略；
     # 对要求必填的平台（如书生端砚）在调用处显式传入 true/false。
@@ -450,54 +459,6 @@ class SystemOneClient:
     ) -> dict[str, Any]:
         """构造请求体，便于日志与离线排查（不做任何网络请求）。"""
         return self._payload(self._prepare(questions), state=state, model=model)
-
-    async def yes_no(
-        self,
-        question: str,
-        *,
-        state: State | None = None,
-        threshold: float = 0.5,
-        when_true: Criterion | None = None,
-        when_false: Criterion | None = None,
-        default: bool | None = None,
-        model: str | None = None,
-        max_retries: int | None = None,
-    ) -> bool:
-        """布尔判断：概率达到 ``threshold`` 即为真。
-
-        Args:
-            question: 待判断的陈述或问题。
-            state: 参照内容。
-            threshold: 判定阈值，0~1。
-            when_true: ``criteria.true``，说明什么情况算「是」。
-            when_false: ``criteria.false``，说明什么情况算「否」。
-            default: 调用失败时的返回值；``None`` 表示把异常抛给调用方。
-        """
-        if not question.strip():
-            raise SystemOneConfigError("question 不能为空")
-        if not 0.0 <= threshold <= 1.0:
-            raise SystemOneConfigError("threshold 需在 0~1 之间")
-        try:
-            answers = await self.ask(
-                {
-                    "answer": noul(
-                        question,
-                        when_true=when_true,
-                        when_false=when_false,
-                    )
-                },
-                state,
-                model=model,
-                max_retries=max_retries,
-            )
-        except (SystemOneRequestError, SystemOneResponseError):
-            if default is None:
-                raise
-            return default
-        answer = answers["answer"]
-        if not isinstance(answer, NoulAnswer):
-            raise SystemOneResponseError("决策服务没有返回 noul 答案")
-        return answer.noul >= threshold
 
     async def choose(
         self,

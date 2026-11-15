@@ -1896,8 +1896,8 @@ input[type="password"]::-ms-clear {
 }
 
 .buffer-messages .buffer-time,
-.buffer-messages .buffer-sender,
-.buffer-messages .buffer-sender-id {
+.buffer-messages .buffer-role,
+.buffer-messages .buffer-role-id {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1909,19 +1909,19 @@ input[type="password"]::-ms-clear {
   font-variant-numeric: tabular-nums;
 }
 
-.buffer-messages .buffer-sender {
+.buffer-messages .buffer-role {
   font-weight: 500;
 }
 
 /* ID 列是辅助信息：弱化颜色，等宽数字，方便扫读 */
-.buffer-messages .buffer-sender-id {
+.buffer-messages .buffer-role-id {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 /* 「我」说过的话单独标色，一眼分出对话双方 */
-.buffer-messages li.self .buffer-sender {
+.buffer-messages li.self .buffer-role {
   color: var(--accent);
 }
 
@@ -2079,12 +2079,12 @@ input[type="password"]::-ms-clear {
     grid-row: 1;
   }
 
-  .buffer-messages .buffer-sender {
+  .buffer-messages .buffer-role {
     grid-column: 2;
     grid-row: 1;
   }
 
-  .buffer-messages .buffer-sender-id {
+  .buffer-messages .buffer-role-id {
     grid-column: 3;
     grid-row: 1;
   }

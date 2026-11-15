@@ -40,7 +40,7 @@ async def test_private_history_adopts_peer_name_when_it_becomes_known() -> None:
     context = SimpleNamespace(conversation_manager=_ConversationManager())
     await buffer.preheat(context, {UMO: 3})  # type: ignore[arg-type]
 
-    assert buffer.recent(UMO, 1)[0].structured_sender_name() == "某人"
+    assert buffer.recent(UMO, 1)[0].structured_role_name() == "某人"
 
     buffer.append(UMO, ChatMessage("Lion", "在吗", 100.0, sender_id="10001"))
 

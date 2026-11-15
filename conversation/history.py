@@ -9,7 +9,7 @@ from typing import Any
 from astrbot.api import logger
 
 from ..common import AMBIENT_HINT_PREFIX
-from .messages import COMPONENT_KINDS, ChatMessage
+from .messages import COMPONENT_KINDS, ChatMessage, shape_from_parts
 
 
 async def load_group_history(
@@ -85,10 +85,10 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
     content = getattr(row, "content", None)
     if not isinstance(content, dict):
         return None
-    parts = content.get("message") or []
     texts: list[str] = []
-    attachments: list[str] = []
-    for part in parts:
+    parts: list[dict[str, Any]] = []
+    text_seen = False
+    for part in content.get("message") or []:
         if not isinstance(part, dict):
             continue
         part_type = str(part.get("type") or "")
@@ -96,18 +96,23 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
             text = str(part.get("text") or "").strip()
             if text:
                 texts.append(text)
-        else:
-            attachments.append(COMPONENT_KINDS.get(part_type, "event"))
+                if not text_seen:
+                    parts.append({"type": "text"})
+                    text_seen = True
+            continue
+        segment = _segment_for(part_type, part)
+        parts.append(segment)
     text = " ".join(texts).strip()
     if text.startswith(AMBIENT_HINT_PREFIX):
         # 历史版本用合成事件投递时，提示语被写成了「收到的消息」，不属于对话内容。
         return None
-    if not text and not attachments:
+    if not text and not parts:
         return None
 
     role = str(content.get("type") or "user")
     # 核心写入的 role 是 "user" / "bot"；"assistant" 是旧版/其它写入方的取值。
     is_bot = role in ("bot", "assistant")
+    kind, attachments, file_name = shape_from_parts(parts)
     return ChatMessage(
         sender_name=bot_name if is_bot else str(getattr(row, "sender_name", "") or ""),
         text=text,
@@ -115,9 +120,22 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
         is_bot=is_bot,
         # 核心对机器人写的是占位值 "bot"，不是真实账号 ID，丢掉避免冒充成员。
         sender_id="" if is_bot else str(getattr(row, "sender_id", "") or ""),
-        kind=attachments[0] if attachments else "text",
-        attachments=tuple(attachments),
+        kind=kind,
+        parts=tuple(parts),
+        attachments=attachments,
+        file_name=file_name,
     )
+
+
+def _segment_for(part_type: str, part: dict[str, Any]) -> dict[str, Any]:
+    """历史里的一段组件 → 有序组成单元；文件段带上文件名（ADR-0036）。"""
+    kind = COMPONENT_KINDS.get(part_type, "event")
+    segment: dict[str, Any] = {"type": kind}
+    if kind == "file":
+        name = str(part.get("name") or part.get("file_name") or "").strip()
+        if name:
+            segment["filename"] = name
+    return segment
 
 
 def _row_timestamp(row: Any) -> float:
@@ -158,33 +176,43 @@ def _history_to_message(record: dict, bot_name: str = "") -> ChatMessage | None:
     if role not in ("user", "assistant"):
         # system（人设/指令）与 tool（函数结果）不属于聊天内容。
         return None
-    text, attachments = _history_content(record.get("content"))
+    text, parts = _history_content(record.get("content"))
     if text.startswith(AMBIENT_HINT_PREFIX):
         # 历史版本留下的提示语是 user 消息，读历史时必须剔除。
         return None
-    if not text and not attachments:
+    if not text and not parts:
         return None
+    kind, attachments, file_name = shape_from_parts(parts)
     return ChatMessage(
         sender_name=bot_name if role == "assistant" else "",
         text=text,
         timestamp=0.0,
         is_bot=role == "assistant",
-        kind=attachments[0] if attachments else "text",
+        kind=kind,
+        parts=parts,
         attachments=attachments,
+        file_name=file_name,
     )
 
 
-def _history_content(content: Any) -> tuple[str, tuple[str, ...]]:
-    """把会话消息的 ``content`` 拆成 ``(纯文本, 附件形态)``，两者都不丢。"""
+def _history_content(content: Any) -> tuple[str, tuple[dict[str, Any], ...]]:
+    """把会话消息的 ``content`` 拆成 ``(纯文本, 有序组成单元)``，两者都不丢。"""
     if isinstance(content, str):
-        return " ".join(content.split()).strip(), ()
+        text = " ".join(content.split()).strip()
+        return text, ({"type": "text"},) if text else ()
     if not isinstance(content, list):
         return "", ()
     texts: list[str] = []
-    attachments: list[str] = []
+    parts: list[dict[str, Any]] = []
+    text_seen = False
     for part in content:
         if isinstance(part, str):
-            texts.append(part)
+            value = part.strip()
+            if value:
+                texts.append(value)
+                if not text_seen:
+                    parts.append({"type": "text"})
+                    text_seen = True
             continue
         if not isinstance(part, dict):
             continue
@@ -193,13 +221,14 @@ def _history_content(content: Any) -> tuple[str, tuple[str, ...]]:
             text = str(part.get("text") or "").strip()
             if text:
                 texts.append(text)
+                if not text_seen:
+                    parts.append({"type": "text"})
+                    text_seen = True
         elif part_type in ("image_url", "image"):
-            attachments.append("image")
-        elif part_type in COMPONENT_KINDS:
-            attachments.append(COMPONENT_KINDS[part_type])
+            parts.append({"type": "image"})
         else:
-            attachments.append("event")
-    return " ".join(texts).strip(), tuple(attachments)
+            parts.append(_segment_for(part_type, part))
+    return " ".join(texts).strip(), tuple(parts)
 
 
 def _stamp_last_message(messages: list[ChatMessage], last_at: int) -> None:

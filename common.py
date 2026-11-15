@@ -47,13 +47,6 @@ INTENT_DIRECT = "direct"
 
 INTENT_DECISION = "decision"
 
-POKE_SELF_NAME = "机器人（你）"
-"""戳一戳指向机器人自己时，结构化决策请求里 ``target.name`` 的固定写法。
-
-不加修饰的「机器人」会和群里昵称就叫「机器人」的成员撞车，实测会让决策模型判错方向，
-见 ``scripts/poke_probe.py`` 的对照实验。
-"""
-
 
 @dataclass(frozen=True, slots=True)
 class Target:

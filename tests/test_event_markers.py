@@ -57,14 +57,14 @@ def test_poke_message_carries_structured_target() -> None:
     assert message is not None
     assert message.kind == "poke"
     assert message.target_id == SELF_ID
-    assert message.target_name == "机器人（你）"
     assert message.target_is_self is True
     # 正文与附件解耦后，对话模型的占位文本由 render_text 生成。
     assert message.text == ""
     assert message.render_text() == "[戳一戳 我]"
 
 
-def test_poke_target_uses_known_nickname() -> None:
+def test_poke_at_member_keeps_id_and_is_not_self() -> None:
+    """戳别人只留 ID：昵称可能与机器人重名，记下来只会让模型误判。"""
     umo = "aiocqhttp:GroupMessage:1"
     buffer = ContextBuffer()
     buffer.append(
@@ -79,7 +79,6 @@ def test_poke_target_uses_known_nickname() -> None:
 
     assert message is not None
     assert message.target_id == "444066154"
-    assert message.target_name == "小明"
     assert message.target_is_self is False
 
 
@@ -93,8 +92,28 @@ def test_text_message_has_no_poke_target() -> None:
     assert message is not None
     assert message.kind == "text"
     assert message.target_id == ""
-    assert message.target_name == ""
     assert message.target_is_self is False
+
+
+def test_poke_self_wins_over_member_nicknamed_bot() -> None:
+    """群里有人昵称就叫「机器人」时，戳自己仍按目标 ID 判定，不靠昵称猜。"""
+    umo = "aiocqhttp:GroupMessage:1"
+    buffer = ContextBuffer()
+    buffer.append(
+        umo,
+        ChatMessage(sender_name="机器人", text="在吗", timestamp=1.0, sender_id="999"),
+    )
+    plugin = _plugin(buffer)
+
+    myself = plugin._build_message(_MessageEvent(Poke(id=SELF_ID)), umo)
+    member = plugin._build_message(_MessageEvent(Poke(id="999")), umo)
+
+    assert myself is not None and member is not None
+    assert myself.target_is_self is True
+    assert myself.target_id == SELF_ID
+    # 戳的是那个成员：判定为「不是自己」，且不记昵称。
+    assert member.target_is_self is False
+    assert member.target_id == "999"
 
 
 def test_poke_without_target_still_marked() -> None:
@@ -156,7 +175,47 @@ def test_file_message_keeps_filename() -> None:
     assert message is not None
     assert message.kind == "file"
     assert message.file_name == "报告.pdf"
-    assert message.render_text() == "[文件]"
+    # 对话模型也要看到文件名：只写「[文件]」等于把唯一可读信息丢掉。
+    assert message.render_text() == "[文件 报告.pdf]"
+
+
+def test_filename_survives_when_file_is_not_first() -> None:
+    """图 + 文件：文件名与 kind 解耦，不再要求文件排在第一位。"""
+    plugin = _plugin(ContextBuffer())
+    event = _MessageEvent(Image(file="a.png"), File(name="报告.pdf", file="u"))
+    event.message_str = "看这个"
+
+    message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
+
+    assert message is not None
+    assert message.kind == "image"
+    assert message.file_name == "报告.pdf"
+    assert message.render_text() == "看这个 [图片] [文件 报告.pdf]"
+
+
+def test_text_plus_poke_is_not_rendered_as_event() -> None:
+    """文字 + 戳一戳：此前占位落到 ``[事件]``，目标也一起丢了。"""
+    plugin = _plugin(ContextBuffer())
+    event = _MessageEvent(Poke(id=SELF_ID))
+    event.message_str = "戳你一下"
+
+    message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
+
+    assert message is not None
+    assert message.render_text() == "戳你一下 [戳一戳 我]"
+
+
+def test_attachment_order_is_rendered_as_is() -> None:
+    """表情在图片前就按表情在前渲染，不再由占位聚合改变顺序。"""
+    plugin = _plugin(ContextBuffer())
+
+    message = plugin._build_message(
+        _MessageEvent(Face(id="1"), Image(file="a.png")),
+        "aiocqhttp:GroupMessage:1",
+    )
+
+    assert message is not None
+    assert message.render_text() == "[表情] [图片]"
 
 
 def test_voice_message_maps_to_audio() -> None:

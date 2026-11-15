@@ -8,15 +8,16 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, File, Image, Plain, Poke, Record, Reply
+from astrbot.api.message_components import At, Image, Plain, Poke, Record, Reply
 from astrbot.api.star import Context, Star, register
 
-from .common import PLUGIN_NAME, POKE_SELF_NAME, resolve_timezone
+from .common import PLUGIN_NAME, resolve_timezone
 from .conversation.context_buffer import ContextBuffer
 from .conversation.messages import (
     COMPONENT_KINDS,
     SELF_NAME,
     ChatMessage,
+    shape_from_parts,
     strip_system_reminder,
 )
 from .rules.models import Binding
@@ -159,14 +160,16 @@ class AmbientChatPlugin(Star):
     def _build_message(self, event: AstrMessageEvent, umo: str) -> ChatMessage | None:
         """组装待入缓冲的消息，图片任务由上下文缓冲在接纳后管理。"""
         text = strip_system_reminder(event.message_str or "").strip()
-        # 正文与附件分开记：一条消息可以既有文字又有图片/语音/文件，两者都不能丢。
-        kind, attachments = _message_shape(event, has_text=bool(text))
-        if not text and kind == "text" and not attachments:
+        chain = getattr(event.message_obj, "message", None) or []
+        # 组成单元按链里的真实顺序采集：文字与附件不再互相吞掉，文件名也不要求
+        # 文件排在第一位（ADR-0036）。
+        parts = _chain_parts(chain, has_text=bool(text))
+        if not parts:
             return None
-        poke = _first_poke(event) if kind == "poke" else None
+        kind, attachments, file_name = shape_from_parts(parts)
+        poke = _first_poke(event) if _has_poke(parts) else None
         sender_id = str(event.get_sender_id() or "")
         self_id = _event_self_id(event)
-        chain = getattr(event.message_obj, "message", None) or []
         target_id = str(poke.target_id() or "") if poke is not None else ""
         target_is_self = bool(target_id) and target_id == self_id
         message = ChatMessage(
@@ -176,16 +179,12 @@ class AmbientChatPlugin(Star):
             is_bot=False,
             sender_id=sender_id,
             kind=kind,
+            parts=parts,
             attachments=attachments,
-            file_name=_first_file_name(event) if kind == "file" else "",
+            file_name=file_name,
             mentions_me=_mentions_self(chain, self_id),
             replies_me=_replies_to_self(chain, self_id),
             target_id=target_id,
-            target_name=(
-                POKE_SELF_NAME
-                if target_is_self
-                else self.buffer.known_name(umo, target_id)
-            ),
             target_is_self=target_is_self,
         )
         return message
@@ -205,9 +204,9 @@ class AmbientChatPlugin(Star):
         """记录 bot 自己的发言，用于冷却与未读基线。
 
         结果链里的语音/图片不能退化成 ``[Record]`` / ``[Image]`` 这类英文占位塞进
-        正文：那样决策模型会把「我发了一条语音」读成「我打了一行字」。形态交给
-        ``kind`` / ``attachments``，正文只留真正的文字；TTS 语音自带原文
-        （``Record.text``）时一并保留，模型至少知道这条语音说了什么。
+        正文：那样决策模型会把「我发了一条语音」读成「我打了一行字」。组成交给
+        ``parts``，正文只留真正的文字；TTS 语音自带原文（``Record.text``）时一并
+        保留，模型至少知道这条语音说了什么。
         """
         if not self.lifecycle.accepts(event.unified_msg_origin, for_message=True):
             return
@@ -222,9 +221,12 @@ class AmbientChatPlugin(Star):
                 text = result.get_plain_text().strip()
             except Exception:  # noqa: BLE001
                 text = ""
-        kind, attachments = _chain_shape(chain, has_text=bool(text))
-        if not text and kind == "text" and not attachments:
+        parts = _chain_parts(chain, has_text=bool(text))
+        if not parts:
+            # 空结果对象：保留一条可读记录，别让缓冲里出现无组成的空消息。
             text = "[非文本消息]"
+            parts = ({"type": "text"},)
+        kind, attachments, file_name = shape_from_parts(parts)
         self.lifecycle.record(
             event.unified_msg_origin,
             ChatMessage(
@@ -234,8 +236,9 @@ class AmbientChatPlugin(Star):
                 is_bot=True,
                 sender_id=_event_self_id(event),
                 kind=kind,
+                parts=parts,
                 attachments=attachments,
-                file_name=_first_file_name_in(chain) if kind == "file" else "",
+                file_name=file_name,
             ),
         )
 
@@ -295,41 +298,44 @@ class AmbientChatPlugin(Star):
         return f"<AmbientChatPlugin rules={len(self.store.rules)}>"
 
 
-def _message_shape(
-    event: AstrMessageEvent,
-    *,
-    has_text: bool,
-) -> tuple[str, tuple[str, ...]]:
-    """把收到的消息链拆成 ``(主形态, 其余附件)``。"""
-    return _chain_shape(getattr(event.message_obj, "message", None), has_text=has_text)
-
-
-def _chain_shape(
+def _chain_parts(
     chain: Any,
     *,
     has_text: bool,
-) -> tuple[str, tuple[str, ...]]:
-    """把消息链拆成 ``(主形态, 其余附件)``。
+) -> tuple[dict[str, Any], ...]:
+    """把消息链拆成有序组成单元（ADR-0036）。
 
-    戳一戳单独占主形态（纯动作消息），其余组件按出现顺序记成附件；这样
-    「文字 + 图片/语音/文件」不会只剩文字，「表情/骰子」这类也终于能进缓冲。
-    收到的消息与 bot 的发送结果共用这套判定，语音在两边都是 ``audio``。
+    顺序就是事实：文字段 ``{"type": "text"}`` 只标记它在链里的位置，正文由
+    ``ChatMessage.text`` 统一提供，不在两处各存一份。``At`` / ``Reply`` 仍按行内
+    装饰跳过（ADR-0026 的取舍：只记「在叫机器人」）。收到的消息与 bot 的发送结果
+    共用这套判定，语音在两边都是 ``audio``。
     """
-    kinds: list[str] = []
+    parts: list[dict[str, Any]] = []
+    text_seen = False
     for component in chain or ():
         name = type(component).__name__.lower()
-        # plain 是正文本身；at / reply 属于正文里的行内装饰（提及、引用），
-        # 不改变这条消息的形态，否则一条「@某人 你好」会被记成 at 类型。
-        if name in ("plain", "at", "reply"):
+        if name in ("at", "reply"):
             continue
-        kinds.append(COMPONENT_KINDS.get(name, "event"))
-    if not kinds:
-        return "text", ()
-    if "poke" in kinds:
-        others = tuple(kind for kind in kinds if kind != "poke")
-        # 带正文时不把整条当成纯戳一戳，否则正文会被丢掉。
-        return ("text" if has_text else "poke"), others
-    return kinds[0], tuple(kinds)
+        if name == "plain":
+            if has_text and not text_seen:
+                parts.append({"type": "text"})
+                text_seen = True
+            continue
+        kind = COMPONENT_KINDS.get(name, "event")
+        segment: dict[str, Any] = {"type": kind}
+        if kind == "file":
+            filename = str(getattr(component, "name", "") or "").strip()
+            if filename:
+                segment["filename"] = filename
+        parts.append(segment)
+    if has_text and not text_seen:
+        # 平台把文字放在 message_str 里、链里没有 Plain 组件：文字放在最前。
+        parts.insert(0, {"type": "text"})
+    return tuple(parts)
+
+
+def _has_poke(parts: tuple[dict[str, Any], ...]) -> bool:
+    return any(part.get("type") == "poke" for part in parts)
 
 
 def _chain_text(chain: Any) -> str:
@@ -369,19 +375,6 @@ def _replies_to_self(chain: tuple[Any, ...] | list[Any], self_id: str) -> bool:
         and str(getattr(component, "sender_id", "") or "") == self_id
         for component in chain
     )
-
-
-def _first_file_name(event: AstrMessageEvent) -> str:
-    """文件消息的文件名；没有则空串。"""
-    return _first_file_name_in(getattr(event.message_obj, "message", None))
-
-
-def _first_file_name_in(chain: Any) -> str:
-    """消息链里第一个文件组件的文件名；没有则空串。"""
-    for component in chain or ():
-        if isinstance(component, File):
-            return str(getattr(component, "name", "") or "").strip()
-    return ""
 
 
 def _first_poke(event: AstrMessageEvent) -> Poke | None:

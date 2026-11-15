@@ -106,6 +106,46 @@ def test_build_prompt_uses_same_render_for_chat_model() -> None:
     assert "署名" not in prompt
 
 
+def test_build_prompt_explains_attachment_order() -> None:
+    """记录里有图片占位时说明附件顺序：图不在文本里，模型只能靠顺序对应。"""
+    target = parse_target("aiocqhttp:GroupMessage:1")
+    assert target is not None
+    messages = [
+        ChatMessage(
+            "小明",
+            "看这个",
+            TS,
+            sender_id="444066154",
+            kind="image",
+            parts=({"type": "text"}, {"type": "image"}),
+        )
+    ]
+
+    prompt = build_prompt(
+        "接一句",
+        messages,
+        datetime(2026, 11, 3, 22, 21, tzinfo=TZ),
+        target,
+    )
+
+    assert "按记录里 [图片] / [语音] 出现的先后顺序排列" in prompt
+
+
+def test_build_prompt_omits_attachment_note_for_pure_text() -> None:
+    """纯文本会话不加附件说明，避免模型以为这次带了图。"""
+    target = parse_target("aiocqhttp:GroupMessage:1")
+    assert target is not None
+
+    prompt = build_prompt(
+        "接一句",
+        [_message()],
+        datetime(2026, 11, 3, 22, 21, tzinfo=TZ),
+        target,
+    )
+
+    assert "先后顺序" not in prompt
+
+
 def test_build_prompt_names_own_messages() -> None:
     """署名改成账号昵称后，对话模型也要知道记录里哪个名字是自己。"""
     target = parse_target("aiocqhttp:GroupMessage:1")

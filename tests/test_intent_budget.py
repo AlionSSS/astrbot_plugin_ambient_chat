@@ -39,7 +39,7 @@ def test_keeps_newest_messages_within_budget() -> None:
     conversation, persona = _fit_conversation(messages, TZ, "人设")
 
     assert _cost(conversation, persona) <= DECISION_STATE_CHAR_BUDGET
-    senders = [entry["sender_name"] for entry in conversation]
+    senders = [entry["role_name"] for entry in conversation]
     assert senders[-1] == "用户059"
     assert "用户000" not in senders
     # 保留的始终是「最新的一段」，顺序仍然是时间正序。
@@ -75,26 +75,26 @@ def test_short_conversation_untouched() -> None:
 
     assert [entry["content"] for entry in conversation] == ["在吗", "在"]
     assert conversation[0]["time"] == "2026-11-03 22:20:00"
-    assert conversation[0]["sender_name"] == "A"
+    assert conversation[0]["role_name"] == "A"
     assert conversation[0]["type"] == "text"
     assert "self" not in conversation[0]
     assert persona == "你是助手"
 
 
 def test_shrink_entry_only_cuts_text() -> None:
-    entry = {"time": None, "sender_name": "A", "content": "前" * 100 + "尾部"}
+    entry = {"time": None, "role_name": "A", "content": "前" * 100 + "尾部"}
 
     shrunk = _shrink_entry(entry, 80)
 
     assert shrunk is not None
-    assert shrunk["sender_name"] == "A" and shrunk["time"] is None
+    assert shrunk["role_name"] == "A" and shrunk["time"] is None
     assert shrunk["content"].startswith("…")
     assert shrunk["content"].endswith("尾部")
     assert len(shrunk["content"]) < len(entry["content"])
 
 
 def test_shrink_entry_gives_up_when_budget_too_small() -> None:
-    entry = {"time": None, "sender_name": "A", "content": "在吗"}
+    entry = {"time": None, "role_name": "A", "content": "在吗"}
 
     assert _shrink_entry(entry, 10) is None
 
@@ -103,7 +103,7 @@ def test_shrink_entry_never_fabricates_content_for_poke() -> None:
     """戳一戳条目没有正文，放不下就整条丢弃，不能凭空塞一个空 content。"""
     entry = {
         "time": None,
-        "sender_name": "小红",
+        "role_name": "小红",
         "type": "poke",
         "target": {"id": "10000", "is_self": True},
     }

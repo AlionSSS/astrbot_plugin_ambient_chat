@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import tzinfo as _tzinfo
+from typing import Any
 
 MAX_TEXT_CHARS = 300
+MAX_FILE_NAME_CHARS = 40
+"""对话侧占位里文件名的上限：文件名来自平台，过长会挤占生成提示的词元。"""
 
 MESSAGE_KINDS = (
     "text",
@@ -25,11 +29,12 @@ MESSAGE_KINDS = (
     "share",
     "music",
     "forward",
-    "reply",
-    "at",
     "event",
 )
-"""条目 ``type`` 的全部取值；``event`` 是未知组件的兜底。"""
+"""条目 ``type`` 与 ``parts`` 各段 ``type`` 的全部取值；``event`` 是未知组件的兜底。
+
+``at`` / ``reply`` 不在此列：它们是正文里的行内装饰，不进组成单元（ADR-0026）。
+"""
 
 COMPONENT_KINDS = {
     "poke": "poke",
@@ -65,11 +70,41 @@ PLACEHOLDERS = {
     "share": "分享",
     "music": "音乐",
     "forward": "合并转发",
-    "reply": "引用",
-    "at": "提及",
     "event": "事件",
 }
 """对话模型的文本占位，统一中文短词：读者是中文对话模型，英文词只会增加噪音。"""
+
+TEXT_SEGMENT = "text"
+"""有序单元里代表正文的那一段；它只标记位置，正文始终由 :attr:`ChatMessage.text` 提供。"""
+
+
+def shape_from_parts(
+    parts: Sequence[Mapping[str, Any]],
+) -> tuple[str, tuple[str, ...], str]:
+    """从有序单元派生 ``(kind, attachments, file_name)``。
+
+    ``kind`` 取第一个非文字单元，只为兼容旧字段（渲染与判定都以 ``parts`` 为准）；
+    ``file_name`` 不再要求文件排在第一——那正是旧实现丢文件名的地方（ADR-0036）。
+    """
+    kinds = tuple(
+        str(part.get("type") or "")
+        for part in parts
+        if part.get("type") != TEXT_SEGMENT
+    )
+    file_name = next(
+        (
+            str(part.get("filename") or "").strip()
+            for part in parts
+            if part.get("type") == "file"
+        ),
+        "",
+    )
+    return (kinds[0] if kinds else TEXT_SEGMENT), kinds, file_name
+
+
+def _shorten(name: str, limit: int = MAX_FILE_NAME_CHARS) -> str:
+    return name if len(name) <= limit else f"{name[: limit - 1]}…"
+
 
 SELF_NAME = "我"
 """机器人自己的默认署名：拿不到账号昵称时统一用它，模型据此认出自己的发言。"""
@@ -142,14 +177,18 @@ class ChatMessage:
     sender_id: str = ""
     """发送者在平台的原始 ID；群聊渲染时附在昵称后用于区分同名用户。"""
     kind: str = "text"
-    """消息形态（见 :data:`MESSAGE_KINDS`）；结构化决策请求据此输出 ``type``。"""
-    attachments: tuple[str, ...] = ()
-    """除正文以外的组件形态，按出现顺序排列（图片/语音/文件/表情…）。
+    """消息形态（见 :data:`MESSAGE_KINDS`）。兼容字段：渲染与判定都改由 ``parts`` 决定。"""
+    parts: tuple[dict[str, Any], ...] = ()
+    """有序组成单元（ADR-0036）：``{"type": "text"}`` 标记文字的位置，其余段是组件。
 
-    与 :attr:`text` 解耦：一条消息可以既有文字又有附件，两者都不能丢。
+    文字段不带正文——正文始终由 :attr:`text` 提供，避免同一段文字存两份，也避免
+    截断规则在两处漂移。空元组表示「未采集顺序」（旧构造点与测试），此时按
+    :attr:`kind` + :attr:`attachments` 的旧约定兜底，文字排在附件之前。
     """
+    attachments: tuple[str, ...] = ()
+    """除正文以外的组件形态，按出现顺序排列（图片/语音/文件/表情…），由 ``parts`` 派生。"""
     file_name: str = ""
-    """``kind == "file"`` 时的文件名：文件消息除了类型，只剩这条可读信息。"""
+    """消息里第一个文件的文件名；与它在链里的位置无关（ADR-0036）。"""
     mentions_me: bool = False
     replies_me: bool = False
     """这条消息 @ 了机器人 / 引用了机器人的消息。
@@ -159,9 +198,12 @@ class ChatMessage:
     剔除了，所以只能从消息链的组件读。
     """
     target_id: str = ""
-    target_name: str = ""
     target_is_self: bool = False
-    """``kind == "poke"`` 时戳的对象：ID、展示名、是否指向机器人自己。"""
+    """消息里有戳一戳时戳的对象 ID，以及它是否指向机器人自己。
+
+    不记目标昵称（ADR-0026 修订）：戳别人时昵称可能和机器人重名，模型做等值比较后
+    会误判成「戳的是自己」；``is_self`` 才是可靠依据。
+    """
 
     def render(self, tz: _tzinfo, *, with_id: bool = False) -> str:
         return (
@@ -176,25 +218,48 @@ class ChatMessage:
             text = f"{text[:MAX_TEXT_CHARS]}…"
         return text
 
-    def placeholder_text(self) -> str:
-        """附件/动作的文本占位，供对话模型的会话记录使用。"""
-        parts: list[str] = []
-        if self.kind == "poke":
-            parts.append(self._poke_text())
-        images = sum(1 for kind in self.attachments if kind == "image")
-        if images:
-            count = f"×{images}" if images > 1 else ""
-            parts.append(f"[图片{count}]")
-        for kind in self.attachments:
-            if kind == "image":
-                continue
-            parts.append(f"[{PLACEHOLDERS.get(kind, PLACEHOLDERS['event'])}]")
-        return " ".join(parts)
+    def ordered_parts(self) -> tuple[dict[str, Any], ...]:
+        """有序组成单元：优先用采集到的顺序，否则按旧约定兜底（正文在最前）。
+
+        采集侧给出真实顺序（文字段只标记位置）；没有 ``parts`` 时按 ``kind`` +
+        ``attachments`` 推导，让旧构造点与测试不必逐个补齐——但那种情况拿不到
+        「文字在图片前还是后」，只能按旧约定把正文排在前面。
+        """
+        if self.parts:
+            return self.parts
+        segments: list[dict[str, Any]] = []
+        if self.body_text():
+            segments.append({"type": TEXT_SEGMENT})
+        kinds = list(self.attachments)
+        if self.kind != TEXT_SEGMENT and self.kind not in kinds:
+            kinds.insert(0, self.kind)
+        for kind in kinds:
+            segment: dict[str, Any] = {"type": kind}
+            if kind == "file" and self.file_name:
+                segment["filename"] = self.file_name
+            segments.append(segment)
+        return tuple(segments)
 
     def render_text(self) -> str:
-        """对话模型看到的正文：@/引用标记 + 纯文字 + 附件占位。"""
-        chunks = [self._addressing_text(), self.body_text(), self.placeholder_text()]
+        """对话模型看到的正文：@/引用标记 + 按真实顺序排列的文字与占位。"""
+        chunks = [self._addressing_text()]
+        for segment in self.ordered_parts():
+            if segment.get("type") == TEXT_SEGMENT:
+                chunks.append(self.body_text())
+            else:
+                chunks.append(self._segment_text(segment))
         return " ".join(chunk for chunk in chunks if chunk)
+
+    def _segment_text(self, segment: Mapping[str, Any]) -> str:
+        """一个非文字单元的占位：戳一戳带目标，文件带文件名，其余用中文短词。"""
+        kind = str(segment.get("type") or "")
+        if kind == "poke":
+            return self._poke_text()
+        if kind == "file":
+            name = str(segment.get("filename") or self.file_name or "").strip()
+            if name:
+                return f"[文件 {_shorten(name)}]"
+        return f"[{PLACEHOLDERS.get(kind, PLACEHOLDERS['event'])}]"
 
     def _addressing_text(self) -> str:
         """「在叫机器人」的标记：@ 了我 / 引用了我。"""
@@ -224,12 +289,10 @@ class ChatMessage:
             return f"用户#{uid}" if uid else "某人"
         return f"{name}#{uid}" if with_id and uid else name
 
-    def structured_sender_name(self) -> str:
-        """结构化条目里的 ``sender_name``：bot 用署名，其余给昵称（缺昵称时退化）。"""
-        if self.is_bot:
-            return self.sender_name.strip() or SELF_NAME
-        name = self.sender_name.strip()
-        if name:
-            return name
-        uid = self.sender_id.strip()
-        return f"用户#{uid}" if uid else "某人"
+    def structured_role_name(self) -> str:
+        """结构化条目里的 ``role_name``：与渲染用名字共用一套规则（只是不带 ID）。
+
+        单单元条目、多单元条目的 ``parts``、WebUI 缓冲区都从这里取名字；再写一份
+        同样的兜底判断，改一处忘一处就会出现「对话侧叫匿名成员、决策侧叫用户#10001」。
+        """
+        return self.display_name()

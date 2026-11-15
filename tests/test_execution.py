@@ -115,7 +115,7 @@ class Harness:
     async def judgment(self, rule, umo, buffer, now):
         self.judged.append((umo, now))
         await self.stage("judging", umo)
-        return IntentResult(True, reason="直接放行")
+        return IntentResult(True, reason="按概率放行（100%）")
 
     async def prepare(self, rule, umo, hint, persona, now):
         await self.stage("generating", umo)

@@ -103,8 +103,9 @@ async def test_state_is_structured(monkeypatch: Any) -> None:
     # 私聊不带发送者 ID，对方昵称放进 scene。
     assert state["scene"] == {"type": "private", "peer_name": "Lion"}
     message = state["conversation"][0]
-    assert message["sender_name"] == "Lion"
-    assert "sender_id" not in message
+    assert message["role"] == "user"
+    assert message["role_name"] == "Lion"
+    assert "role_id" not in message
     assert message["content"] == "在吗"
     assert message["time"] == "2026-11-04 05:39:12"
 
@@ -179,8 +180,9 @@ async def test_group_sender_carries_id(monkeypatch: Any) -> None:
     assert router.state["scene"] == {"type": "group"}
     message = router.state["conversation"][0]
     # 群聊把名字与 ID 拆成两个字段，模型据此区分同名成员。
-    assert message["sender_name"] == "Lion"
-    assert message["sender_id"] == "444066154"
+    assert message["role"] == "user"
+    assert message["role_name"] == "Lion"
+    assert message["role_id"] == "444066154"
 
 
 @pytest.mark.asyncio

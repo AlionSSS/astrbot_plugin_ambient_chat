@@ -35,6 +35,10 @@ MODE_CONTINUE = "continue"
 MODE_NEW_TOPIC = "new_topic"
 MODE_DIRECT = "direct"
 
+ROLE_USER = "user"
+ROLE_ASSISTANT = "assistant"
+"""``state.conversation`` 条目里的 ``role``：其他参与者是 user，机器人自己是 assistant。"""
+
 FAILURE_CONTENT_REJECTED = "content_rejected"
 FAILURE_DECISION = "decision_failed"
 """判定失败分类：页面按它标红并给出提示，不把「失败」混进普通「跳过」。"""
@@ -253,7 +257,7 @@ class IntentJudge:
                 scores=metric,
                 fresh_ratio=fresh_ratio,
             )
-        if new_topic >= threshold:
+        if new_topic >= threshold * 3 / 5:
             return IntentResult(
                 True,
                 MODE_NEW_TOPIC,
@@ -271,11 +275,11 @@ class IntentJudge:
 
     @staticmethod
     def _by_probability(probability: float) -> IntentResult:
-        """按概率决定是否放行：``1.0`` 时等价于旧版「直接放行」，不做随机。"""
-        if probability >= 1.0:
-            return IntentResult(True, MODE_DIRECT, "直接放行")
+        """按概率决定是否放行：``0`` 与 ``1.0`` 是必然结论，不掷随机数。"""
         percent = f"{probability * 100:.0f}%"
-        if probability > 0.0 and random.random() < probability:
+        # 两端都是确定事件：1.0 必定放行、0 必定放弃。短路掉抽样，省一个随机数，
+        # 也让这两个极值的结果不受随机源影响（可复现）。
+        if probability >= 1.0 or (probability > 0.0 and random.random() < probability):
             return IntentResult(True, MODE_DIRECT, f"按概率放行（{percent}）")
         return IntentResult(False, MODE_CONTINUE, f"按概率未放行（{percent}）")
 
@@ -482,50 +486,65 @@ def _message_entry(
 ) -> dict[str, Any]:
     """一条消息的结构化形态；时间未知时 ``time`` 为 None，不编造。
 
-    发送者拆成 ``sender_name`` / ``sender_id``（``with_id`` 为真才带 ID），
-    正文按形态给出 ``type``（``text`` / ``image`` / ``audio`` / ``video`` /
-    ``file`` / ``face`` 等，见 :data:`MESSAGE_KINDS`）。``content`` 只放真正的
-    文字，没有文字就整个省略；多附件时另给 ``attachments``。@ 了机器人 / 引用了
-    机器人的消息会在条目上带 ``mentions_me`` / ``replies_me``（只在这两种关系成立
-    时出现）。戳一戳不带可读正文，改为 ``target`` 对象（``name`` / ``id`` / ``is_self``）。
+    发言者用 ``role`` + ``role_name`` 表达：其他参与者 ``role="user"``，机器人自己
+    ``role="assistant"``；``role_id`` 是平台 ID，只在群聊里带（``with_id``）。组成单元
+    只有一个时沿用扁平写法（``type`` + ``content`` / ``target`` / ``filename``），这样
+    ADR-0026 实测过的纯文本、纯媒体、纯戳一戳条目格式不变；由多个单元组成时改用
+    有序的 ``parts``：``[{"type": "text", "content": …}, {"type": "image"}, …]``，
+    顺序与组成都是事实（ADR-0036）。@ 了机器人 / 引用了机器人的消息带
+    ``mentions_me`` / ``replies_me``。
 
-    为什么这么拆：判定模型是 4B 小模型，`昵称#ID` 挤在一个字符串里时它既不做
-    字段对齐，也会把「戳一戳」整条当噪声；给 ``type`` + ``target.name`` 之后
-    方向判定才稳定，见 ``scripts/poke_probe.py`` 的对照实验。
+    为什么保留扁平写法：判定模型是 4B 小模型，多一层嵌套就多一层定位成本
+    （见 ``docs/adr/0026`` 的对照实验），而绝大多数条目本来就是单单元。
     """
     entry: dict[str, Any] = {
         "time": format_time(message.timestamp, tz),
-        "sender_name": message.structured_sender_name(),
+        "role": ROLE_ASSISTANT if message.is_bot else ROLE_USER,
+        "role_name": message.structured_role_name(),
     }
     if with_id and message.sender_id:
-        entry["sender_id"] = message.sender_id
+        entry["role_id"] = message.sender_id
     if message.is_bot:
+        # role 已经说明「这是你自己」，self 只是冗余的显式强调；保留是因为它零歧义。
         entry["self"] = True
-    if message.kind == "poke":
-        entry["type"] = "poke"
-        target: dict[str, Any] = {}
-        if message.target_id:
-            target["id"] = message.target_id
-        if message.target_name:
-            target["name"] = message.target_name
-        target["is_self"] = message.target_is_self
-        entry["target"] = target
-        return entry
-    entry["type"] = message.kind
     # 只记「在叫机器人」的两个事实，@别人/引用别人不进条目。
     if message.mentions_me:
         entry["mentions_me"] = True
     if message.replies_me:
         entry["replies_me"] = True
-    body = message.body_text()
-    if body:
-        entry["content"] = body
-    if len(message.attachments) > 1:
-        # 一条消息可以有多个附件（文字 + 图片 + 文件…），单附件时 type 已说明。
-        entry["attachments"] = list(message.attachments)
-    if message.kind == "file" and message.file_name:
-        entry["filename"] = message.file_name
+    segments = _entry_segments(message)
+    if len(segments) > 1:
+        entry["parts"] = segments
+        return entry
+    segment = segments[0] if segments else {"type": "text"}
+    entry["type"] = segment["type"]
+    for key, value in segment.items():
+        if key != "type":
+            entry[key] = value
     return entry
+
+
+def _entry_segments(message: ChatMessage) -> list[dict[str, Any]]:
+    """条目的组成单元：text 段补上正文，poke 段补上 target（ADR-0036）。"""
+    segments: list[dict[str, Any]] = []
+    for part in message.ordered_parts():
+        kind = str(part.get("type") or "")
+        if kind == "text":
+            body = message.body_text()
+            if body:
+                segments.append({"type": "text", "content": body})
+            continue
+        segment = dict(part)
+        if kind == "poke":
+            target: dict[str, Any] = {}
+            if message.target_id:
+                target["id"] = message.target_id
+            # 不带 name：戳别人时昵称可能和机器人重名，模型会据此误判成「戳的是自己」
+            # （实测 0.706）；只给 id + is_self 时正样本 0.963、负样本 0.17。
+            target["is_self"] = message.target_is_self
+            segment["target"] = target
+        segments.append(segment)
+    return segments
 
 
 def _entry_cost(entry: dict[str, Any]) -> int:
@@ -582,8 +601,27 @@ def _fit_conversation(
 def _shrink_entry(entry: dict[str, Any], remaining: int) -> dict[str, Any] | None:
     """单条也放不下时保留正文尾部；连结构字段都放不下则放弃这条。
 
-    戳一戳条目没有正文可截，放不下就整条丢弃，绝不硬塞一个空 ``content``。
+    只截 text 段：扁平的 ``content`` 与 ``parts`` 里的 text 段都按尾部保留，其余
+    结构字段（time / sender / 附件段）不动。没有正文可截的条目（纯媒体、戳一戳）
+    放不下就整条丢弃，绝不硬塞一个空 ``content``。
     """
+    parts = entry.get("parts")
+    if isinstance(parts, list):
+        index = next(
+            (i for i, part in enumerate(parts) if part.get("type") == "text"), None
+        )
+        if index is None:
+            return None
+        probe = {**entry, "parts": [{**part} for part in parts]}
+        probe["parts"][index]["content"] = ""
+        limit = remaining - _entry_cost(probe)
+        if limit < 2:
+            return None
+        shrunk = {**entry, "parts": [{**part} for part in parts]}
+        shrunk["parts"][index]["content"] = _cut(
+            str(parts[index].get("content") or ""), limit, keep="tail"
+        )
+        return shrunk
     if "content" not in entry:
         return None
     limit = remaining - _entry_cost({**entry, "content": ""})
@@ -623,5 +661,5 @@ def _build_instructions(question: str) -> str:
         )
     return (
         "基于你的人设，结合 now 与每条消息的 time，判断："
-        "针对当前会话内容，你是否应主动开启一个新话题？"
+        "当前会话内容是否适合开启一个新话题？"
     )

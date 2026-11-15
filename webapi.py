@@ -244,10 +244,10 @@ class AmbientWebApi:
                     "messages": [
                         {
                             "at": format_stamp(item.timestamp, tz),
-                            # 名字与 ID 分开给：前端按两列展示，同名用户必须能区分开。
-                            "sender_name": item.structured_sender_name(),
-                            "sender_id": "" if item.is_bot else item.sender_id.strip(),
-                            "self": item.is_bot,
+                            # 与判定请求同一套口径：role 说明是谁，名字与 ID 分两列展示。
+                            "role": "assistant" if item.is_bot else "user",
+                            "role_name": item.structured_role_name(),
+                            "role_id": "" if item.is_bot else item.sender_id.strip(),
                             "text": item.render_text(),
                             "images": len(item.images),
                             "audio": len(item.audio),

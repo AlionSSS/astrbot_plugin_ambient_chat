@@ -452,6 +452,13 @@ def build_prompt(
         name = (self_name or "").strip()
         if name:
             note += f"记录里署名「{name}」的发言都是你自己之前说的。"
+        if "[图片]" in transcript or "[语音]" in transcript:
+            # 图片与语音不在文本里，而是作为附件平铺附带：说明顺序对应关系，
+            # 否则模型只知道「有图」，不知道哪张图属于哪条消息。
+            note += (
+                "若本次带有图片或语音附件，它们按记录里 [图片] / [语音] "
+                "出现的先后顺序排列。"
+            )
         parts.append(
             f"{note}\n<recent_conversation>\n{transcript}\n</recent_conversation>"
         )
