@@ -56,7 +56,7 @@ class AmbientSessionFilter(filter.CustomFilter):
     PLUGIN_NAME,
     "AlionSSS",
     "让 AI 像人一样自己去「看一眼」聊天：按时机翻关注会话的新内容，按兴趣决定要不要搭句话，而不是只能等被点名。",
-    "0.5.1",
+    "0.6.0",
 )
 class AmbientChatPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
