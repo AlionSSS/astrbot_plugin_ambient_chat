@@ -230,6 +230,10 @@ def test_voice_message_maps_to_audio() -> None:
     assert message.render_text() == "[语音]"
 
 
+def _decoration(message, kind: str) -> list[dict]:
+    return [part for part in message.parts if part.get("type") == kind]
+
+
 def test_mention_of_bot_is_recorded() -> None:
     """核心会把 @机器人 从正文里剔除，只能靠组件识别。"""
     plugin = _plugin(ContextBuffer())
@@ -239,7 +243,9 @@ def test_mention_of_bot_is_recorded() -> None:
     message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
 
     assert message is not None
-    assert message.mentions_me is True
+    assert _decoration(message, "at") == [
+        {"type": "at", "target_role_id": SELF_ID, "is_self": True}
+    ]
     assert message.render_text() == "[提及 我] 这游戏不错 [表情]"
 
 
@@ -251,7 +257,10 @@ def test_mention_of_others_is_ignored() -> None:
     message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
 
     assert message is not None
-    assert message.mentions_me is False
+    assert _decoration(message, "at") == [
+        {"type": "at", "target_role_id": "444066154", "is_self": False}
+    ]
+    # 目标不是自己：不生成「提及 我」标记，@ 由正文里的平台文本承担。
     assert message.render_text() == "@小明(444066154) 这游戏不错"
 
 
@@ -263,7 +272,20 @@ def test_mention_all_is_not_me() -> None:
     message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
 
     assert message is not None
-    assert message.mentions_me is False
+    assert _decoration(message, "at") == [
+        {"type": "at", "target_role_id": "all", "is_self": False}
+    ]
+    assert message.render_text() == "开会了"
+
+
+def test_mention_only_message_is_dropped() -> None:
+    """只有 @ 没有正文与媒体的消息渲染出来是空行，不入缓冲。"""
+    plugin = _plugin(ContextBuffer())
+    event = _MessageEvent(At(qq=SELF_ID, name="我"))
+
+    message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
+
+    assert message is None
 
 
 def test_reply_to_bot_is_recorded() -> None:
@@ -280,7 +302,9 @@ def test_reply_to_bot_is_recorded() -> None:
     message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
 
     assert message is not None
-    assert message.replies_me is True
+    assert _decoration(message, "reply") == [
+        {"type": "reply", "target_role_id": SELF_ID, "is_self": True}
+    ]
     assert message.render_text() == "[引用 我] 这游戏不错"
 
 
@@ -298,7 +322,9 @@ def test_reply_to_others_is_ignored() -> None:
     message = plugin._build_message(event, "aiocqhttp:GroupMessage:1")
 
     assert message is not None
-    assert message.replies_me is False
+    assert _decoration(message, "reply") == [
+        {"type": "reply", "target_role_id": "444066154", "is_self": False}
+    ]
     assert message.render_text() == "这游戏不错"
 
 

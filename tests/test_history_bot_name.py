@@ -55,6 +55,50 @@ def test_group_history_keeps_other_members_untouched() -> None:
     assert not message.is_bot
 
 
+def test_group_history_at_becomes_decoration_part() -> None:
+    """核心给 at 存了 user_id：还原成目标 ID，历史行里没有自身 ID 时不算「提及 我」。"""
+    row = SimpleNamespace(
+        content={
+            "type": "user",
+            "message": [
+                {"type": "plain", "text": "这游戏不错"},
+                {"type": "at", "user_id": "10000", "name": "我"},
+            ],
+        },
+        sender_name="小明",
+        sender_id="444066154",
+        created_at=datetime(2026, 11, 5, 20, 0),
+    )
+
+    message = _row_to_message(row)
+
+    assert message is not None
+    assert message.parts[-1] == {"type": "at", "target_role_id": "10000"}
+    assert message.render_text() == "这游戏不错"
+
+
+def test_group_history_reply_is_dropped() -> None:
+    """核心的 reply 只存 sender_name、没有账号 ID，凑不出目标就整段丢弃。"""
+    row = SimpleNamespace(
+        content={
+            "type": "user",
+            "message": [
+                {"type": "reply", "sender_name": "我", "text": "我在"},
+                {"type": "plain", "text": "这游戏不错"},
+            ],
+        },
+        sender_name="小明",
+        sender_id="444066154",
+        created_at=datetime(2026, 11, 5, 20, 0),
+    )
+
+    message = _row_to_message(row)
+
+    assert message is not None
+    assert all(part.get("type") != "reply" for part in message.parts)
+    assert message.render_text() == "这游戏不错"
+
+
 def test_private_history_bot_gets_name() -> None:
     message = _history_to_message(
         {"role": "assistant", "content": "在的"}, "蓝色小肥鱼"

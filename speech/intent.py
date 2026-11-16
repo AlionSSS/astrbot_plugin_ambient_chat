@@ -20,6 +20,7 @@ from astrbot.api.provider import DecisionError
 from ..common import AMBIENT_HINT_PREFIX, INTENT_DECISION, parse_target
 from ..conversation.context_buffer import ContextBuffer
 from ..conversation.messages import (
+    DECORATION_KINDS,
     SELF_NAME,
     WEEKDAY_ZH,
     ChatMessage,
@@ -88,9 +89,9 @@ DECISION_STATE_CHAR_BUDGET = 6500
 """判定请求里 ``state``（conversation 消息条目 + persona）的字符预算。
 
 ``intern-decision-4b`` 的上下文是 8K。实测（书生端砚，中文群聊）真实请求的
-token/字符比约 **0.72**：3703 字符的请求体对应 2686 input tokens。按 ADR-0018
+token/字符比约 **0.72**：3703 字符的请求体对应 2686 input tokens。按 ADR-0009
 最初的「1 字 ≈ 1 token」最坏假设，6500 字符 + questions（约 380 字符）仍低于
-8192；按实测比例则只用掉约 61% 的窗口（ADR-0023）。
+8192；按实测比例则只用掉约 61% 的窗口（ADR-0009）。
 
 成本按条目序列化后的 JSON 文本计，key 与引号的开销已算在内。
 """
@@ -117,13 +118,13 @@ class IntentResult:
     failure: str = ""
     """判定失败分类（见 :data:`FAILURE_DECISION` 等）；未失败时为空串。"""
     scores: tuple[float, float] | None = None
-    """判定给出的原始概率 ``(感兴趣, 新话题)``，用于累积关注度（ADR-0034）。
+    """判定给出的原始概率 ``(感兴趣, 新话题)``，用于累积关注度（ADR-0012）。
 
     只有决策模型判定成功时才有；按概率放行与判定失败都为空，后者不能当作
     「不感兴趣」记账，否则一次网络抖动就会拉低这个会话的关注度。
     """
     fresh_ratio: float = 0.0
-    """本次判定里「没记过账」的消息占比，用来折算关注度的观测权重（ADR-0035）。
+    """本次判定里「没记过账」的消息占比，用来折算关注度的观测权重（ADR-0012）。
 
     比例按**真正进入请求**的条数算：被字符预算裁掉的旧消息没有参与判定，不能进
     分母。为 0 表示这段内容已经记过账，重复判定不应再改变关注度。缺省给 0 而不是
@@ -179,7 +180,7 @@ class IntentJudge:
         if not conversation:
             return IntentResult(False, MODE_CONTINUE, "上下文为空")
         # 真正送进请求的是裁剪后的尾部：比例必须在同一段上算，否则被裁掉的旧消息
-        # 会稀释「新增内容」，让重复判定仍然按大半份证据入账（ADR-0035）。
+        # 会稀释「新增内容」，让重复判定仍然按大半份证据入账（ADR-0012）。
         used = messages[-len(conversation) :]
         fresh_ratio = _fresh_ratio(buffer, umo, used)
         prompts = {
@@ -239,7 +240,7 @@ class IntentJudge:
             )
 
         # 判定成功才把这段内容记为已记账：失败时下次重试仍算新内容，
-        # 一份证据不会因为一次抖动被永久吞掉（ADR-0035）。
+        # 一份证据不会因为一次抖动被永久吞掉（ADR-0012）。
         buffer.mark_judged(umo, used)
         # 两条线各自独立：接话看「感兴趣」，冷场主动开口看「新话题」。
         interested = probabilities.get("interested", 0.0)
@@ -433,19 +434,24 @@ def _identity_entry(
     provider: Callable[[str], Mapping[str, str]] | None,
     umo: str,
 ) -> dict[str, str]:
-    """``state.self``：机器人自己的名字与可选 ID；取不到名字时用「我」。"""
+    """``state.self``：机器人自己的署名与可选账号 ID，字段名与条目同一套。
+
+    用 ``role_name`` / ``role_id`` 而不是 ``name`` / ``id``（ADR-0009）：条目里的
+    发送者就是这两个名字，``at`` 段的目标也叫 ``target_role_id``，同一个 ``state``
+    里不再有两套「名字 + ID」的写法。取不到名字时用「我」。
+    """
     if provider is None:
-        return {"name": SELF_NAME}
+        return {"role_name": SELF_NAME}
     try:
         data = provider(umo)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[Ambient] 读取机器人署名失败：%s", exc)
-        return {"name": SELF_NAME}
+        return {"role_name": SELF_NAME}
     name = str(data.get("name") or "").strip() or SELF_NAME
-    entry = {"name": name}
+    entry = {"role_name": name}
     self_id = str(data.get("id") or "").strip()
     if self_id:
-        entry["id"] = self_id
+        entry["role_id"] = self_id
     return entry
 
 
@@ -466,7 +472,7 @@ def _brief(exc: BaseException) -> str:
 
 
 def _fresh_ratio(buffer: ContextBuffer, umo: str, used: Sequence[ChatMessage]) -> float:
-    """本次请求的消息里没记过账的占比（ADR-0035）。
+    """本次请求的消息里没记过账的占比（ADR-0012）。
 
     静默会话每次触发都会把同一段内容再判一遍，若按一次完整观测记账，关注度就变成
     「决策次数」的函数而不是「内容」的函数。折算后等价于「每攒够约一个窗口的新
@@ -488,10 +494,11 @@ def _message_entry(
     发言者用 ``role`` + ``role_name`` 表达：其他参与者 ``role="user"``，机器人自己
     ``role="assistant"``；``role_id`` 是平台 ID，只在群聊里带（``with_id``）。组成单元
     只有一个时沿用扁平写法（``type`` + ``content`` / ``target`` / ``filename``），这样
-    ADR-0026 实测过的纯文本、纯媒体、纯戳一戳条目格式不变；由多个单元组成时改用
+    ADR-0009 实测过的纯文本、纯媒体、纯戳一戳条目格式不变；由多个单元组成时改用
     有序的 ``parts``：``[{"type": "text", "content": …}, {"type": "image"}, …]``，
-    顺序与组成都是事实（ADR-0036）。@ 了机器人 / 引用了机器人的消息带
-    ``mentions_me`` / ``replies_me``。
+    顺序与组成都是事实（ADR-0009）。@ 与引用也是段：``{"type": "at",
+    "target_role_id": "…"}`` / ``{"type": "reply", "target_role_id": "…"}``，
+    不再另发 ``mentions_me`` / ``replies_me`` 布尔（ADR-0009）。
 
     为什么保留扁平写法：判定模型是 4B 小模型，多一层嵌套就多一层定位成本
     （见 ``docs/adr/0026`` 的对照实验），而绝大多数条目本来就是单单元。
@@ -506,11 +513,6 @@ def _message_entry(
     if message.is_bot:
         # role 已经说明「这是你自己」，self 只是冗余的显式强调；保留是因为它零歧义。
         entry["self"] = True
-    # 只记「在叫机器人」的两个事实，@别人/引用别人不进条目。
-    if message.mentions_me:
-        entry["mentions_me"] = True
-    if message.replies_me:
-        entry["replies_me"] = True
     segments = _entry_segments(message)
     if len(segments) > 1:
         entry["parts"] = segments
@@ -524,7 +526,11 @@ def _message_entry(
 
 
 def _entry_segments(message: ChatMessage) -> list[dict[str, Any]]:
-    """条目的组成单元：text 段补上正文，poke 段补上 target（ADR-0036）。"""
+    """条目的组成单元：text 段补上正文，poke 段补上 target（ADR-0009）。
+
+    ``at`` / ``reply`` 只下发 ``target_role_id``：``is_self`` 是采集侧算给渲染用的
+    冗余标记（ADR-0009），判定模型自己做不了 ID 等值推理，下发反而多占预算。
+    """
     segments: list[dict[str, Any]] = []
     for part in message.ordered_parts():
         kind = str(part.get("type") or "")
@@ -534,6 +540,10 @@ def _entry_segments(message: ChatMessage) -> list[dict[str, Any]]:
                 segments.append({"type": "text", "content": body})
             continue
         segment = dict(part)
+        if kind in DECORATION_KINDS:
+            segment.pop("is_self", None)
+            if not segment.get("target_role_id"):
+                continue
         if kind == "poke":
             target: dict[str, Any] = {}
             if message.target_id:

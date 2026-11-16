@@ -1,6 +1,6 @@
 """规则、绑定与更多设置的读取、整体约束校验和原子提交。
 
-配置文件仍位于插件数据目录的 settings.json；提交约定见 ADR-0028。
+配置文件仍位于插件数据目录的 settings.json；提交约定见 ADR-0005。
 """
 
 from __future__ import annotations
@@ -208,7 +208,7 @@ class RuleStore:
 
     # ------------------------------------------------------------------ 规则
     def ordered_rules(self) -> list[Rule]:
-        """规则的展示顺序：最近修改的在前，见 ADR-0014。
+        """规则的展示顺序：最近修改的在前，见 ADR-0001。
 
         同一秒保存的规则按插入顺序倒序，保证"后写入的在上面"。
         历史数据没有 ``updated_at``，这些规则统一沉到最后；它们之间同样按插入顺序倒序
@@ -238,7 +238,7 @@ class RuleStore:
     def delete_rule(self, rule_id: str) -> int:
         """删除未被任何绑定引用的规则。
 
-        被绑定引用时拒绝删除（不再级联，见 ADR-0014），返回被删除的绑定数（恒为 0，
+        被绑定引用时拒绝删除（不再级联，见 ADR-0001），返回被删除的绑定数（恒为 0，
         保留返回值以兼容既有调用方）。
         """
         rule = self.rules.get(rule_id)
@@ -269,9 +269,9 @@ class RuleStore:
     def upsert_binding(self, raw: Any) -> Binding:
         """新建或更新一条绑定。
 
-        ``enabled`` 不由调用方决定（见 ADR-0015）：新建的绑定落在停止态，
+        ``enabled`` 不由调用方决定（见 ADR-0002）：新建的绑定落在停止态，
         编辑已有绑定则沿用磁盘上的启停状态，启停只能通过 :meth:`set_binding_enabled` 改。
-        运行中的绑定不允许改配置（ADR-0016）：先停止再编辑，避免目标会话、
+        运行中的绑定不允许改配置（ADR-0002）：先停止再编辑，避免目标会话、
         规则与已预热缓冲不一致。
         """
         binding = Binding.parse(raw)
@@ -300,7 +300,7 @@ class RuleStore:
             )
         if not binding.name:
             binding.name = self.next_binding_name(binding.platform_id, binding.id)
-        # 启停只由「运行管理」页的 toggle 决定（ADR-0015）：新建的绑定一律落在停止态，
+        # 启停只由「运行管理」页的 toggle 决定（ADR-0002）：新建的绑定一律落在停止态，
         # 编辑保存只改配置、沿用磁盘上的原有启停状态，不因保存而启动。
         existing = self.bindings.get(binding.id)
         binding.enabled = existing.enabled if existing is not None else False
@@ -329,7 +329,7 @@ class RuleStore:
         return f"{DEFAULT_BINDING_NAME_PREFIX}-{index}"
 
     def delete_binding(self, binding_id: str) -> bool:
-        """删除绑定；运行中的绑定先停止才能删（ADR-0016）。"""
+        """删除绑定；运行中的绑定先停止才能删（ADR-0002）。"""
         if self._binding_guard is not None:
             self._binding_guard(binding_id)
         binding = self.bindings.get(binding_id)

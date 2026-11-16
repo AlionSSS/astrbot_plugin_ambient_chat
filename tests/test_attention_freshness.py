@@ -1,4 +1,4 @@
-"""关注度只按新内容记账：缓冲标记与判定侧的折算比例（ADR-0035）。"""
+"""关注度只按新内容记账：缓冲标记与判定侧的折算比例（ADR-0012）。"""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def test_evicted_message_stops_being_the_marker() -> None:
 
 
 def test_preheated_history_is_not_new_content() -> None:
-    """启动预热读进缓冲的是历史：那次判定不该把整窗历史再记一遍满额账（ADR-0035）。"""
+    """启动预热读进缓冲的是历史：那次判定不该把整窗历史再记一遍满额账（ADR-0012）。"""
     buffer = ContextBuffer(maxlen=100)
     history = [ChatMessage("A", f"历史 {index}", 0.0) for index in range(8)]
 

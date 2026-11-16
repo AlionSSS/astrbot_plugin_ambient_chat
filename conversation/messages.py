@@ -33,8 +33,13 @@ MESSAGE_KINDS = (
 )
 """条目 ``type`` 与 ``parts`` 各段 ``type`` 的全部取值；``event`` 是未知组件的兜底。
 
-``at`` / ``reply`` 不在此列：它们是正文里的行内装饰，不进组成单元（ADR-0026）。
+``at`` / ``reply`` 不在此列：它们进 ``parts`` 表达位置与目标（见 :data:`DECORATION_KINDS`），
+但不算「消息形态」，也不进 ``attachments``。``at`` 与 ``reply`` 单独列出，是因为
+「这条消息是什么」由文字/媒体决定，@ 谁、引用谁只是行内装饰。
 """
+
+DECORATION_KINDS = ("at", "reply")
+"""行内装饰段：``at`` / ``reply`` 各带一个 ``target_role_id``，以及仅供渲染的 ``is_self``。"""
 
 COMPONENT_KINDS = {
     "poke": "poke",
@@ -84,12 +89,12 @@ def shape_from_parts(
     """从有序单元派生 ``(kind, attachments, file_name)``。
 
     ``kind`` 取第一个非文字单元，只为兼容旧字段（渲染与判定都以 ``parts`` 为准）；
-    ``file_name`` 不再要求文件排在第一——那正是旧实现丢文件名的地方（ADR-0036）。
+    ``file_name`` 不再要求文件排在第一——那正是旧实现丢文件名的地方（ADR-0009）。
     """
     kinds = tuple(
         str(part.get("type") or "")
         for part in parts
-        if part.get("type") != TEXT_SEGMENT
+        if part.get("type") != TEXT_SEGMENT and part.get("type") not in DECORATION_KINDS
     )
     file_name = next(
         (
@@ -179,29 +184,24 @@ class ChatMessage:
     kind: str = "text"
     """消息形态（见 :data:`MESSAGE_KINDS`）。兼容字段：渲染与判定都改由 ``parts`` 决定。"""
     parts: tuple[dict[str, Any], ...] = ()
-    """有序组成单元（ADR-0036）：``{"type": "text"}`` 标记文字的位置，其余段是组件。
+    """有序组成单元（ADR-0009）：``{"type": "text"}`` 标记文字的位置，其余段是组件。
 
     文字段不带正文——正文始终由 :attr:`text` 提供，避免同一段文字存两份，也避免
     截断规则在两处漂移。空元组表示「未采集顺序」（旧构造点与测试），此时按
     :attr:`kind` + :attr:`attachments` 的旧约定兜底，文字排在附件之前。
+
+    ``at`` / ``reply`` 也作为段出现（ADR-0009）：各带 ``target_role_id``（目标账号）
+    与 ``is_self``（是否指向机器人自己）；``is_self`` 只供渲染，进判定请求前剥掉。
     """
     attachments: tuple[str, ...] = ()
     """除正文以外的组件形态，按出现顺序排列（图片/语音/文件/表情…），由 ``parts`` 派生。"""
     file_name: str = ""
-    """消息里第一个文件的文件名；与它在链里的位置无关（ADR-0036）。"""
-    mentions_me: bool = False
-    replies_me: bool = False
-    """这条消息 @ 了机器人 / 引用了机器人的消息。
-
-    只记这两个事实：其他人的 @ 与引用不进缓冲（记全量要占预算，而判定只关心
-    「有没有人在叫我」）。@机器人 与 @全体都被核心适配器从 ``message_str`` 里
-    剔除了，所以只能从消息链的组件读。
-    """
+    """消息里第一个文件的文件名；与它在链里的位置无关（ADR-0009）。"""
     target_id: str = ""
     target_is_self: bool = False
     """消息里有戳一戳时戳的对象 ID，以及它是否指向机器人自己。
 
-    不记目标昵称（ADR-0026 修订）：戳别人时昵称可能和机器人重名，模型做等值比较后
+    不记目标昵称（ADR-0009 修订）：戳别人时昵称可能和机器人重名，模型做等值比较后
     会误判成「戳的是自己」；``is_self`` 才是可靠依据。
     """
 
@@ -259,16 +259,27 @@ class ChatMessage:
             name = str(segment.get("filename") or self.file_name or "").strip()
             if name:
                 return f"[文件 {_shorten(name)}]"
+        if kind in DECORATION_KINDS:
+            # 行内装饰不占占位：标记由 _addressing_text 统一放在正文前。
+            return ""
         return f"[{PLACEHOLDERS.get(kind, PLACEHOLDERS['event'])}]"
 
     def _addressing_text(self) -> str:
-        """「在叫机器人」的标记：@ 了我 / 引用了我。"""
-        parts: list[str] = []
-        if self.mentions_me:
-            parts.append("[提及 我]")
-        if self.replies_me:
-            parts.append("[引用 我]")
-        return " ".join(parts)
+        """「在叫机器人」的标记：@ 了我 / 引用了我。
+
+        事实读自 ``parts`` 的 ``at`` / ``reply`` 段，不再单存两个布尔：同一条消息里
+        这两件事各有位置，判定请求也直接用这些段（ADR-0009）。
+        """
+        marks: list[str] = []
+        for segment in self.ordered_parts():
+            kind = str(segment.get("type") or "")
+            if not segment.get("is_self"):
+                continue
+            if kind == "at":
+                marks.append("[提及 我]")
+            elif kind == "reply":
+                marks.append("[引用 我]")
+        return " ".join(marks)
 
     def _poke_text(self) -> str:
         """戳一戳的文本占位：指向机器人自己时写「我」，否则带上目标 ID。"""

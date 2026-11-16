@@ -2,7 +2,7 @@
 
 核心 AstrBot 也有一个分段回复（``platform_settings.segmented_reply``），但它挂在
 管线的 ``result_decorate`` / ``respond`` 两个 stage 上；插件走「直接生成」，不经过
-管线（ADR-0011），所以只能在这里自建一份（ADR-0032）。
+管线（ADR-0007），所以只能在这里自建一份。
 
 本模块只负责纯文本切分，不发送、不等待；投递循环在 :mod:`speech.delivery`。
 """

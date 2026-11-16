@@ -1,4 +1,4 @@
-"""关注度：带回退先验的均值、永不为零的权重、加权抽取与档案读写（ADR-0034）。"""
+"""关注度：带回退先验的均值、永不为零的权重、加权抽取与档案读写（ADR-0012）。"""
 
 import asyncio
 import json
@@ -57,7 +57,7 @@ def test_weight_never_drops_below_floor() -> None:
 
 
 def test_partial_weight_only_adds_its_share() -> None:
-    """重复判定的同一段内容只按新增占比入账：均值不变，置信度打折（ADR-0035）。"""
+    """重复判定的同一段内容只按新增占比入账：均值不变，置信度打折（ADR-0012）。"""
     record = Attention()
     record.observe(0.9, 0.1, weight=0.25)
 
@@ -363,7 +363,7 @@ async def test_failed_reload_write_preserves_changes_and_retries(
 async def test_apply_store_changes_skips_prune_when_store_failed(
     tmp_path: Path,
 ) -> None:
-    """settings.json 读盘失败时 store 是空的：不能把关注度当孤儿删掉（ADR-0034）。"""
+    """settings.json 读盘失败时 store 是空的：不能把关注度当孤儿删掉（ADR-0012）。"""
     store = AttentionStore(tmp_path)
     umo = "aiocqhttp:GroupMessage:1"
     store.observe(umo, interested=0.9, new_topic=0.9)

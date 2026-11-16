@@ -58,6 +58,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 __all__ = [
+    "CallTrace",
     "ChoiceAnswer",
     "ChoiceQuestion",
     "NoulAnswer",
@@ -277,6 +278,37 @@ class SystemOneUsage(BaseModel):
     output_tokens: int = 0
 
 
+@dataclass(slots=True)
+class CallTrace:
+    """一次调用的请求/响应快照。
+
+    由调用方创建并传进 :meth:`SystemOneClient.ask`：并发调用各持一份，互不覆盖。
+    客户端实例只持有连接池，不再保存「最近一次」状态——共享实例 + 可变状态
+    在并发下会把 A 的响应记到 B 的调试日志里。
+    """
+
+    request_body: dict[str, Any] | None = None
+    """本次请求发送的 JSON body。"""
+    response_text: str | None = None
+    """本次响应（含失败尝试）的原始文本 body；网络失败时为 ``None``。"""
+    status_code: int | None = None
+    """本次响应的 HTTP 状态码；网络失败时为 ``None``。"""
+    model: str = ""
+    """成功响应里实际使用的模型名（可能被服务端解析别名）。"""
+    usage: SystemOneUsage | None = None
+    """成功响应的 token 用量。"""
+
+    def response_json(self, fallback: Any = None) -> Any:
+        """响应体解析后的 JSON；不是合法 JSON 时返回原文，无响应时返回 ``fallback``。"""
+        raw = self.response_text
+        if not raw:
+            return fallback
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw
+
+
 class _SystemOneResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -363,7 +395,8 @@ class SystemOneClient:
     """SystemOne HTTP 客户端。
 
     一个实例持有一个 ``httpx.AsyncClient``；用 ``async with`` 或显式
-    ``await client.close()`` 释放。
+    ``await client.close()`` 释放。实例可在多个并发调用间共享：每次调用的
+    请求/响应信息由调用方持有的 :class:`CallTrace` 承载。
     """
 
     def __init__(
@@ -373,16 +406,6 @@ class SystemOneClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.config = config
-        self.last_usage: SystemOneUsage | None = None
-        """最近一次成功响应的 token 用量。"""
-        self.last_model: str = ""
-        """最近一次成功响应实际使用的模型名（可能被服务端解析别名）。"""
-        self.last_request_body: dict[str, Any] | None = None
-        """调试用：最近一次请求发送的 JSON body，原样保留。"""
-        self.last_response_text: str | None = None
-        """调试用：最近一次响应（含失败尝试）的原始文本 body。"""
-        self.last_status_code: int | None = None
-        """调试用：最近一次响应的 HTTP 状态码；网络失败时为 ``None``。"""
         self._endpoint = (config.endpoint or "").strip() or resolve_endpoint(
             config.base_url
         )
@@ -430,6 +453,7 @@ class SystemOneClient:
         *,
         model: str | None = None,
         max_retries: int | None = None,
+        trace: CallTrace | None = None,
     ) -> dict[str, Answer]:
         """一次请求回答多个问题，按键名返回带类型的答案。
 
@@ -438,6 +462,8 @@ class SystemOneClient:
             state: 所有问题共同参照的内容，``None`` 时发送 ``{}``。
             model: 覆盖配置里的模型名。
             max_retries: 覆盖配置里的重试次数。
+            trace: 调用方持有的请求/响应快照；并发调用各传一份才不会互相覆盖。
+                缺省时用一次性对象，调用方事后读不到。
 
         Raises:
             SystemOneConfigError: 问题定义不合法。
@@ -445,10 +471,12 @@ class SystemOneClient:
             SystemOneTimeout: 整次请求超出 ``total_timeout``。
             SystemOneResponseError: 响应不符合协议契约。
         """
+        trace = CallTrace() if trace is None else trace
         prepared = self._prepare(questions)
         payload = self._payload(prepared, state=state, model=model)
-        response = await self._request(payload, max_retries=max_retries)
-        return self._build_answers(prepared, self._parse_response(response))
+        trace.request_body = payload
+        response = await self._request(payload, max_retries=max_retries, trace=trace)
+        return self._build_answers(prepared, self._parse_response(response, trace))
 
     def build_payload(
         self,
@@ -468,6 +496,7 @@ class SystemOneClient:
         state: State | None = None,
         model: str | None = None,
         max_retries: int | None = None,
+        trace: CallTrace | None = None,
     ) -> ChoiceAnswer:
         """多选一。返回的 ``choice`` / ``probabilities`` 已换回调用方的选项值。"""
         normalized = _normalize_choice_criteria(criteria)
@@ -485,6 +514,7 @@ class SystemOneClient:
             state,
             model=model,
             max_retries=max_retries,
+            trace=trace,
         )
         answer = answers["answer"]
         if not isinstance(answer, ChoiceAnswer):
@@ -510,6 +540,7 @@ class SystemOneClient:
         state: State | None = None,
         model: str | None = None,
         max_retries: int | None = None,
+        trace: CallTrace | None = None,
     ) -> ScoreAnswer:
         """按等级打分，返回期望分（可为小数）、置信度与概率分布。"""
         answer = await self.ask(
@@ -517,6 +548,7 @@ class SystemOneClient:
             state,
             model=model,
             max_retries=max_retries,
+            trace=trace,
         )
         result = answer["answer"]
         if not isinstance(result, ScoreAnswer):
@@ -562,12 +594,13 @@ class SystemOneClient:
         payload: dict[str, Any],
         *,
         max_retries: int | None,
+        trace: CallTrace,
     ) -> httpx.Response:
         retries = self.config.max_retries if max_retries is None else max_retries
         try:
             async with self._semaphore:
                 return await asyncio.wait_for(
-                    self._post_with_retry(payload, retries),
+                    self._post_with_retry(payload, retries, trace),
                     timeout=self.config.total_timeout,
                 )
         except (TimeoutError, asyncio.TimeoutError) as exc:
@@ -579,11 +612,11 @@ class SystemOneClient:
         self,
         payload: dict[str, Any],
         retries: int,
+        trace: CallTrace,
     ) -> httpx.Response:
         attempt = 0
-        self.last_request_body = payload
-        self.last_response_text = None
-        self.last_status_code = None
+        trace.response_text = None
+        trace.status_code = None
         while True:
             attempt += 1
             try:
@@ -595,8 +628,8 @@ class SystemOneClient:
                 raise SystemOneRequestError(
                     f"SystemOne 请求失败（{type(exc).__name__}）：{exc}"
                 ) from exc
-            self.last_status_code = response.status_code
-            self.last_response_text = response.text
+            trace.status_code = response.status_code
+            trace.response_text = response.text
             if response.status_code < 400:
                 return response
             detail = _error_detail(response)
@@ -613,7 +646,9 @@ class SystemOneClient:
                 detail=detail,
             )
 
-    def _parse_response(self, response: httpx.Response) -> _SystemOneResponse:
+    def _parse_response(
+        self, response: httpx.Response, trace: CallTrace
+    ) -> _SystemOneResponse:
         try:
             data = response.json()
         except ValueError as exc:
@@ -643,8 +678,8 @@ class SystemOneClient:
             raise SystemOneResponseError(
                 f"SystemOne 响应结构不符合协议：{_validation_message(exc)}"
             ) from exc
-        self.last_model = parsed.model
-        self.last_usage = parsed.usage
+        trace.model = parsed.model
+        trace.usage = parsed.usage
         return parsed
 
     def _build_answers(

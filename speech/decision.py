@@ -7,12 +7,12 @@
   这类端点（如书生端砚）要求 ``noul`` 必须带 ``criteria.true`` / ``criteria.false``；
 - 其他：按 provider id 交给核心。
 
-任一分支失败都转成 :class:`DecisionError`，由调用方 fail-closed（ADR-0005）。
+任一分支失败都转成 :class:`DecisionError`，由调用方 fail-closed（ADR-0008）。
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -25,6 +25,7 @@ from ..rules.models import CUSTOM_DECISION_PREFIX, DecisionModel
 from ..rules.store import RuleStore
 from .debug_log import write_debug_record
 from .systemone_sdk import (
+    CallTrace,
     ChoiceAnswer,
     NoulAnswer,
     ScoreAnswer,
@@ -70,7 +71,7 @@ class DecisionContentRejected(DecisionError):
     """决策平台因内容审核拒绝了请求。
 
     请求格式合法，是会话内容被判为敏感；单独一类，好让页面给出「改内容」而不是
-    「改配置」的提示（见 ADR-0033）。
+    「改配置」的提示（见 ADR-0008）。
     """
 
 
@@ -113,26 +114,27 @@ async def probe_decision_model(
                 ["可以等", "本周处理", "今天处理"],
             ),
         }
+        trace = CallTrace()
         try:
-            answers = await client.ask(questions, state=PROBE_STATE)
+            answers = await client.ask(questions, state=PROBE_STATE, trace=trace)
         except Exception as exc:
             _debug_record(
                 "decision-probe",
-                client.last_request_body,
-                _raw_response_body(client),
+                trace.request_body,
+                trace.response_json(),
                 started=started,
                 store=store,
-                meta=_custom_meta(model, client),
+                meta=_custom_meta(model, client, trace),
                 error=f"{type(exc).__name__}: {exc}",
             )
             raise
         _debug_record(
             "decision-probe",
-            client.last_request_body,
-            _raw_response_body(client),
+            trace.request_body,
+            trace.response_json(),
             started=started,
             store=store,
-            meta=_custom_meta(model, client),
+            meta=_custom_meta(model, client, trace),
         )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     noul_answer = answers["noul"]
@@ -147,11 +149,9 @@ async def probe_decision_model(
 
     return {
         "endpoint": client.endpoint,
-        "model": client.last_model or model.model,
+        "model": trace.model or model.model,
         "elapsed_ms": elapsed_ms,
-        "usage": (
-            client.last_usage.model_dump() if client.last_usage is not None else None
-        ),
+        "usage": trace.usage.model_dump() if trace.usage is not None else None,
         "answers": {
             "noul": {
                 "type": noul_answer.type,
@@ -210,25 +210,16 @@ def _debug_record(
     )
 
 
-def _custom_meta(model: DecisionModel, client: SystemOneClient) -> dict[str, Any]:
+def _custom_meta(
+    model: DecisionModel, client: SystemOneClient, trace: CallTrace
+) -> dict[str, Any]:
     """自定义决策模型的端点与响应状态，便于对照落盘文件。"""
     return {
         "model_id": model.id,
         "model_name": model.name,
         "endpoint": client.endpoint,
-        "status_code": client.last_status_code,
+        "status_code": trace.status_code,
     }
-
-
-def _raw_response_body(client: SystemOneClient, answers: Any = None) -> Any:
-    """优先返回服务端原始响应 body；解析失败时退回已解析的答案。"""
-    raw = client.last_response_text
-    if raw:
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return raw
-    return answers
 
 
 class DecisionRouter:
@@ -247,6 +238,8 @@ class DecisionRouter:
         """测试注入用；生产环境交给 httpx 自己建连接池。"""
         self._clients: dict[str, tuple[tuple, SystemOneClient]] = {}
         """自定义模型 ID → (配置指纹, 客户端)，配置一变就重建。"""
+        self._clients_lock = asyncio.Lock()
+        """保护 ``_clients`` 的检查-替换：配置变更时的并发判断不能各建一个客户端。"""
 
     async def probabilities(
         self,
@@ -276,24 +269,30 @@ class DecisionRouter:
         return await self._ask_official(ref or None, prompts, state)
 
     async def reload(self, model_ids: set[str] | None = None) -> None:
-        """受影响判断退出后，仅释放已变更或删除的客户端。"""
+        """受影响判断退出后，仅释放已变更或删除的客户端。
+
+        调用方必须已取消并等待相关判断收尾（见 ``SpeechExecution.reconcile``）：
+        这里会关闭客户端，在途请求会以「客户端被关闭」失败。
+        """
         current = {
             model.id: (model.base_url, model.api_key, model.model)
             for model in self._store.settings.decision_models
         }
-        clients = []
-        for model_id, (fingerprint, client) in list(self._clients.items()):
-            if model_ids is not None and model_id not in model_ids:
-                continue
-            if current.get(model_id) != fingerprint:
-                self._clients.pop(model_id)
-                clients.append(client)
+        async with self._clients_lock:
+            clients = []
+            for model_id, (fingerprint, client) in list(self._clients.items()):
+                if model_ids is not None and model_id not in model_ids:
+                    continue
+                if current.get(model_id) != fingerprint:
+                    self._clients.pop(model_id)
+                    clients.append(client)
         for client in clients:
             await client.close()
 
     async def close(self) -> None:
-        clients = [client for _, client in self._clients.values()]
-        self._clients.clear()
+        async with self._clients_lock:
+            clients = [client for _, client in self._clients.values()]
+            self._clients.clear()
         for client in clients:
             await client.close()
 
@@ -385,18 +384,21 @@ class DecisionRouter:
             )
             for head, prompt in prompts.items()
         }
+        # 每次调用各持一份 trace：客户端是共享的长连接池，落到它身上的
+        # 「最近一次」状态在并发下会把别人的请求/响应记进本次日志。
+        trace = CallTrace()
         started = time.perf_counter()
         try:
-            answers = await client.ask(questions, state=state)
+            answers = await client.ask(questions, state=state, trace=trace)
         except Exception as exc:  # noqa: BLE001
             # 含 SDK 的协议错误、网络错误，以及客户端被并发关闭等意外。
             _debug_record(
                 "decision-custom",
-                client.last_request_body,
-                _raw_response_body(client),
+                trace.request_body,
+                trace.response_json(),
                 store=self._store,
                 started=started,
-                meta=_custom_meta(model, client),
+                meta=_custom_meta(model, client, trace),
                 error=f"{type(exc).__name__}: {exc}",
             )
             if isinstance(exc, SystemOneContentRejected):
@@ -408,17 +410,17 @@ class DecisionRouter:
             ) from exc
         _debug_record(
             "decision-custom",
-            client.last_request_body,
-            _raw_response_body(client, answers),
+            trace.request_body,
+            trace.response_json(answers),
             store=self._store,
             started=started,
-            meta=_custom_meta(model, client),
+            meta=_custom_meta(model, client, trace),
         )
-        if client.last_usage is not None:
+        if trace.usage is not None:
             logger.debug(
                 "[Ambient] 决策模型「%s」用量：%s",
                 model.name,
-                client.last_usage,
+                trace.usage,
             )
 
         result: dict[str, float] = {}
@@ -432,19 +434,25 @@ class DecisionRouter:
         return result
 
     async def _client_for(self, model: DecisionModel) -> SystemOneClient:
+        """按配置指纹取客户端，并在锁内完成「检查-替换」。
+
+        临界区里没有 ``await``：两个判断同时发现配置过期时，不会各建一个客户端
+        而漏掉前一个的 ``close()``。旧客户端在锁外关闭，不拖住其它模型的判断。
+        """
         fingerprint = (
             model.base_url,
             model.api_key,
             model.model,
         )
-        cached = self._clients.get(model.id)
-        if cached is not None:
-            if cached[0] == fingerprint:
+        async with self._clients_lock:
+            cached = self._clients.get(model.id)
+            if cached is not None and cached[0] == fingerprint:
                 return cached[1]
+            client = SystemOneClient(
+                _config_for(model),
+                transport=self._transport,
+            )
+            self._clients[model.id] = (fingerprint, client)
+        if cached is not None:
             await cached[1].close()
-        client = SystemOneClient(
-            _config_for(model),
-            transport=self._transport,
-        )
-        self._clients[model.id] = (fingerprint, client)
         return client

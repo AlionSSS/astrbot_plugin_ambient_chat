@@ -4,7 +4,7 @@ import { on, state } from '../store.js';
 import { $, escapeHtml, kindLabel } from '../util.js';
 
 /**
- * 左列的机器人清单，见 ADR-0013：
+ * 左列的机器人清单，见 ADR-0001：
  * - `platforms` 里的全部平台都列出（WebChat 也列，只是不给它新增绑定）；
  * - 绑定引用但平台配置里已不存在的「孤儿」也列出，否则这些绑定看不见也删不掉。
  */
@@ -62,16 +62,16 @@ export function blankBinding() {
     rule_id: state.rules[0]?.id || '',
     name: '',
     targets: [],
-    // 新建默认按关注度挑：同样的名额，比等概率随机更聪明（ADR-0034）。
+    // 新建默认按关注度挑：同样的名额，比等概率随机更聪明（ADR-0012）。
     selection: { mode: 'weighted', count: 3 },
-    // 新建即停止：启停只在「运行管理」页操作，见 ADR-0015。
+    // 新建即停止：启停只在「运行管理」页操作，见 ADR-0002。
     enabled: false,
   };
 }
 
 /**
  * 该机器人应用下已被其它绑定占用的会话（umo → 占用它的绑定）。
- * 编辑既有绑定时排除自己；目标会话在机器人应用内唯一，见 ADR-0012。
+ * 编辑既有绑定时排除自己；目标会话在机器人应用内唯一，见 ADR-0002。
  */
 export function occupiedTargets(platformId) {
   const occupied = new Map();
@@ -177,7 +177,7 @@ function bindingRow(binding) {
     ? `<span class="sessions" tabindex="0">${targets.length} 个会话${umoTooltip(targets)}</span>`
     : '<span class="muted">无目标会话</span>';
   // 本页只管配置：启停状态给个标记，免得以为保存完就在跑（启停在「运行管理」）。
-  // 运行中的绑定只读：能点开查看，但不能改配置、不能删，见 ADR-0016。
+  // 运行中的绑定只读：能点开查看，但不能改配置、不能删，见 ADR-0002。
   const running = binding.enabled !== false;
   const stopping = binding.lifecycle === 'stopping';
   const statePill = stopping

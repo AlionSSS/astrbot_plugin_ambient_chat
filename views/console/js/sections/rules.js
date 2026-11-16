@@ -18,7 +18,7 @@ import { on, state } from '../store.js';
 import { askConfirm, askInfo, toast } from '../ui.js';
 import { $, clone, escapeHtml, fromLocalInput, getPath, setPath, toLocalInput } from '../util.js';
 
-/** 规则列表每页条数，见 ADR-0014：只在前端切片，接口仍返回全量。 */
+/** 规则列表每页条数，见 ADR-0001：只在前端切片，接口仍返回全量。 */
 const RULES_PER_PAGE = 10;
 
 /** 行内的修改时间：绝对时间，规则页不轮询，相对时间会停在旧值。 */
@@ -135,7 +135,7 @@ function renderRuleModal() {
   const note = $('#context-turns-limit');
   if (note) {
     const bufferSize = Number(state.meta?.settings?.buffer_size);
-    note.textContent = bufferSize > 0 ? `（缓冲区配置上限 ${bufferSize} 条）` : '';
+    note.textContent = bufferSize > 0 ? `（缓冲区 ${bufferSize} 条）` : '';
   }
 
   fillProviderSelect(
@@ -438,7 +438,7 @@ async function saveRule() {
   }
 }
 
-/** 删除在行内触发（弹窗里只有保存/取消），见 ADR-0014。 */
+/** 删除在行内触发（弹窗里只有保存/取消），见 ADR-0001。 */
 async function deleteRuleRow(ruleId) {
   const rule = state.rules.find((item) => item.id === ruleId);
   if (!rule) return;

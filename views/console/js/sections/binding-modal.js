@@ -95,7 +95,7 @@ function renderBindingModal() {
   renderSelectionHint();
   renderTargetConflicts();
   renderSessionPicker();
-  // 运行中只读：可以打开查看，但保存按下去只会被后端拒绝（ADR-0016），提前禁用。
+  // 运行中只读：可以打开查看，但保存按下去只会被后端拒绝（ADR-0002），提前禁用。
   renderSaveButton();
 }
 
@@ -129,7 +129,7 @@ function targetConflicts() {
   return conflicts;
 }
 
-/** 运行中只读：与 saveBinding 的拦截条件保持一致（ADR-0016）。 */
+/** 运行中只读：与 saveBinding 的拦截条件保持一致（ADR-0002）。 */
 function saveLockState() {
   const binding = state.editingBinding;
   if (!binding) return { locked: false, stopping: false };
@@ -247,7 +247,7 @@ function renderSessionPicker() {
   const occupying = occupiedTargets(bindingPlatformId());
   picker.innerHTML = state.sessions
     .map((item) => {
-      // 已被该机器人其它绑定占用的会话直接禁用：保存时后端也会拒绝（ADR-0012）。
+      // 已被该机器人其它绑定占用的会话直接禁用：保存时后端也会拒绝（ADR-0002）。
       const owner = occupying.get(item.umo);
       const checked = existing.has(item.umo);
       return `<li class="${owner ? 'is-occupied' : ''}">
@@ -310,7 +310,7 @@ async function saveBinding() {
   try {
     const data = await apiPost('bindings/save', { binding });
     closeBindingModal();
-    // 保存不改变启停：新建的绑定仍是停止态，要生效得去「运行管理」启动（ADR-0015）。
+    // 保存不改变启停：新建的绑定仍是停止态，要生效得去「运行管理」启动（ADR-0002）。
     await finishSaved(
       data,
       data?.binding?.enabled
@@ -327,7 +327,7 @@ async function saveBinding() {
   }
 }
 
-/** 删除在行内触发（弹窗里只有保存/取消），见 ADR-0013。 */
+/** 删除在行内触发（弹窗里只有保存/取消），见 ADR-0001。 */
 async function deleteBindingRow(bindingId) {
   const binding = state.bindings.find((item) => item.id === bindingId);
   if (!binding) return;

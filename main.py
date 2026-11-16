@@ -8,13 +8,14 @@ from zoneinfo import ZoneInfo
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, Image, Plain, Poke, Record, Reply
+from astrbot.api.message_components import Image, Plain, Poke, Record
 from astrbot.api.star import Context, Star, register
 
 from .common import PLUGIN_NAME, resolve_timezone
 from .conversation.context_buffer import ContextBuffer
 from .conversation.messages import (
     COMPONENT_KINDS,
+    DECORATION_KINDS,
     SELF_NAME,
     ChatMessage,
     shape_from_parts,
@@ -116,7 +117,7 @@ class AmbientChatPlugin(Star):
         # 那是「settings.json 坏了」连累画像一起丢。宁可留着脏数据等修好再清。
         if self.store.load_failed:
             return
-        # 目标从所有绑定里消失后，它的关注度也就没有归属了（ADR-0034）。
+        # 目标从所有绑定里消失后，它的关注度也就没有归属了（ADR-0012）。
         self.attention.prune(
             {umo for binding in self.store.bindings.values() for umo in binding.targets}
         )
@@ -146,7 +147,7 @@ class AmbientChatPlugin(Star):
             umo,
             message,
             image_components=[item for item in chain if isinstance(item, Image)],
-            # 语音原样转存，由缓冲决定是否启用（默认关闭，见 ADR-0031）。
+            # 语音原样转存，由缓冲决定是否启用（默认关闭，见 ADR-0011）。
             audio_components=[item for item in chain if isinstance(item, Record)],
         )
 
@@ -161,15 +162,17 @@ class AmbientChatPlugin(Star):
         """组装待入缓冲的消息，图片任务由上下文缓冲在接纳后管理。"""
         text = strip_system_reminder(event.message_str or "").strip()
         chain = getattr(event.message_obj, "message", None) or []
+        self_id = _event_self_id(event)
         # 组成单元按链里的真实顺序采集：文字与附件不再互相吞掉，文件名也不要求
-        # 文件排在第一位（ADR-0036）。
-        parts = _chain_parts(chain, has_text=bool(text))
-        if not parts:
+        # 文件排在第一位，@ / 引用作为行内装饰段一并采集（ADR-0009）。
+        parts = _chain_parts(chain, has_text=bool(text), self_id=self_id)
+        if not parts or all(part.get("type") in DECORATION_KINDS for part in parts):
+            # 只有 @ / 引用、没有正文与媒体的消息（如「@我」单独一条）不入缓冲：
+            # 渲染出来是空行，判定也读不到内容。
             return None
         kind, attachments, file_name = shape_from_parts(parts)
         poke = _first_poke(event) if _has_poke(parts) else None
         sender_id = str(event.get_sender_id() or "")
-        self_id = _event_self_id(event)
         target_id = str(poke.target_id() or "") if poke is not None else ""
         target_is_self = bool(target_id) and target_id == self_id
         message = ChatMessage(
@@ -182,8 +185,6 @@ class AmbientChatPlugin(Star):
             parts=parts,
             attachments=attachments,
             file_name=file_name,
-            mentions_me=_mentions_self(chain, self_id),
-            replies_me=_replies_to_self(chain, self_id),
             target_id=target_id,
             target_is_self=target_is_self,
         )
@@ -221,7 +222,11 @@ class AmbientChatPlugin(Star):
                 text = result.get_plain_text().strip()
             except Exception:  # noqa: BLE001
                 text = ""
-        parts = _chain_parts(chain, has_text=bool(text))
+        parts = _chain_parts(
+            chain,
+            has_text=bool(text),
+            self_id=_event_self_id(event),
+        )
         if not parts:
             # 空结果对象：保留一条可读记录，别让缓冲里出现无组成的空消息。
             text = "[非文本消息]"
@@ -302,19 +307,24 @@ def _chain_parts(
     chain: Any,
     *,
     has_text: bool,
+    self_id: str = "",
 ) -> tuple[dict[str, Any], ...]:
-    """把消息链拆成有序组成单元（ADR-0036）。
+    """把消息链拆成有序组成单元（ADR-0009）。
 
     顺序就是事实：文字段 ``{"type": "text"}`` 只标记它在链里的位置，正文由
-    ``ChatMessage.text`` 统一提供，不在两处各存一份。``At`` / ``Reply`` 仍按行内
-    装饰跳过（ADR-0026 的取舍：只记「在叫机器人」）。收到的消息与 bot 的发送结果
-    共用这套判定，语音在两边都是 ``audio``。
+    ``ChatMessage.text`` 统一提供，不在两处各存一份。``At`` / ``Reply`` 也进
+    ``parts``（ADR-0009）：各带 ``target_role_id`` 与 ``is_self``，判定请求会剥掉
+    ``is_self`` 只看目标 ID。收到的消息与 bot 的发送结果共用这套判定，语音在两边
+    都是 ``audio``。
     """
     parts: list[dict[str, Any]] = []
     text_seen = False
     for component in chain or ():
         name = type(component).__name__.lower()
         if name in ("at", "reply"):
+            segment = _decoration_part(component, name, self_id)
+            if segment is not None:
+                parts.append(segment)
             continue
         if name == "plain":
             if has_text and not text_seen:
@@ -332,6 +342,30 @@ def _chain_parts(
         # 平台把文字放在 message_str 里、链里没有 Plain 组件：文字放在最前。
         parts.insert(0, {"type": "text"})
     return tuple(parts)
+
+
+def _decoration_part(
+    component: Any,
+    kind: str,
+    self_id: str,
+) -> dict[str, Any] | None:
+    """``At`` / ``Reply`` → 行内装饰段；没有目标 ID 时返回 None（不占预算）。
+
+    ``is_self`` 在这里算：平台只给账号 ID，判定与渲染都不该让模型做等值推理。
+    ``@全体`` 的 ID 是 ``all``，照常记下来但不指向自己。
+    """
+    target = (
+        str(getattr(component, "qq", "") or "").strip()
+        if kind == "at"
+        else str(getattr(component, "sender_id", "") or "").strip()
+    )
+    if not target:
+        return None
+    return {
+        "type": kind,
+        "target_role_id": target,
+        "is_self": bool(self_id) and target == self_id,
+    }
 
 
 def _has_poke(parts: tuple[dict[str, Any], ...]) -> bool:
@@ -354,27 +388,6 @@ def _chain_text(chain: Any) -> str:
         if value and value not in texts:
             texts.append(value)
     return " ".join(texts)
-
-
-def _mentions_self(chain: tuple[Any, ...] | list[Any], self_id: str) -> bool:
-    """消息链里有没有 @ 机器人。核心会把 @机器人 从正文里剔除，只能看组件。"""
-    if not self_id:
-        return False
-    return any(
-        isinstance(component, At) and str(getattr(component, "qq", "")) == self_id
-        for component in chain
-    )
-
-
-def _replies_to_self(chain: tuple[Any, ...] | list[Any], self_id: str) -> bool:
-    """引用的那条消息是不是机器人自己发的。"""
-    if not self_id:
-        return False
-    return any(
-        isinstance(component, Reply)
-        and str(getattr(component, "sender_id", "") or "") == self_id
-        for component in chain
-    )
 
 
 def _first_poke(event: AstrMessageEvent) -> Poke | None:

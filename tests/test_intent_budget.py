@@ -26,7 +26,7 @@ def _cost(conversation: list[dict], persona: str) -> int:
 
 
 def test_budget_stays_inside_8k_even_at_one_token_per_char() -> None:
-    """预算是按「1 字 ≈ 1 token」的最坏假设定的（ADR-0018 / ADR-0023）。"""
+    """预算是按「1 字 ≈ 1 token」的最坏假设定的（ADR-0009）。"""
     assert DECISION_STATE_CHAR_BUDGET + QUESTION_OVERHEAD_CHARS <= 8192
 
 

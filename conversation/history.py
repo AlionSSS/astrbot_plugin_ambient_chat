@@ -9,7 +9,12 @@ from typing import Any
 from astrbot.api import logger
 
 from ..common import AMBIENT_HINT_PREFIX
-from .messages import COMPONENT_KINDS, ChatMessage, shape_from_parts
+from .messages import (
+    COMPONENT_KINDS,
+    DECORATION_KINDS,
+    ChatMessage,
+    shape_from_parts,
+)
 
 
 async def load_group_history(
@@ -101,12 +106,14 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
                     text_seen = True
             continue
         segment = _segment_for(part_type, part)
-        parts.append(segment)
+        if segment is not None:
+            parts.append(segment)
     text = " ".join(texts).strip()
     if text.startswith(AMBIENT_HINT_PREFIX):
         # 历史版本用合成事件投递时，提示语被写成了「收到的消息」，不属于对话内容。
         return None
-    if not text and not parts:
+    if not text and all(part.get("type") in DECORATION_KINDS for part in parts):
+        # 与实时采集同一口径：只有 @ / 引用的历史行渲染出来是空行，不入缓冲。
         return None
 
     role = str(content.get("type") or "user")
@@ -127,10 +134,26 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
     )
 
 
-def _segment_for(part_type: str, part: dict[str, Any]) -> dict[str, Any]:
-    """历史里的一段组件 → 有序组成单元；文件段带上文件名（ADR-0036）。"""
+def _segment_for(part_type: str, part: dict[str, Any]) -> dict[str, Any] | None:
+    """历史里的一段组件 → 有序组成单元；文件段带上文件名（ADR-0009）。
+
+    ``at`` / ``reply``（ADR-0009）：
+
+    - 核心给 ``at`` 存了 ``user_id``，能还原成 ``target_role_id``；历史行里没有
+      机器人自己的账号 ID（bot 行只有占位 ``"bot"``），所以 ``is_self`` 留空。
+    - 核心给 ``reply`` 只存 ``sender_name``、没有 ``sender_id``，凑不出目标 ID，
+      整段丢弃——判定侧不会把「引用」错读成「引用了我」。
+    """
     kind = COMPONENT_KINDS.get(part_type, "event")
+    if kind == "reply":
+        return None
     segment: dict[str, Any] = {"type": kind}
+    if kind == "at":
+        target = str(part.get("user_id") or "").strip()
+        if not target:
+            return None
+        segment["target_role_id"] = target
+        return segment
     if kind == "file":
         name = str(part.get("name") or part.get("file_name") or "").strip()
         if name:
@@ -227,7 +250,9 @@ def _history_content(content: Any) -> tuple[str, tuple[dict[str, Any], ...]]:
         elif part_type in ("image_url", "image"):
             parts.append({"type": "image"})
         else:
-            parts.append(_segment_for(part_type, part))
+            segment = _segment_for(part_type, part)
+            if segment is not None:
+                parts.append(segment)
     return " ".join(texts).strip(), tuple(parts)
 
 

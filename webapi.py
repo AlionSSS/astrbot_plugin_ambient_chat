@@ -384,7 +384,7 @@ class AmbientWebApi:
         )
 
     async def toggle_binding(self) -> Any:
-        """启动 / 停止绑定：启动会先预热，请求返回即代表预热完成（ADR-0016）。"""
+        """启动 / 停止绑定：启动会先预热，请求返回即代表预热完成（ADR-0004）。"""
         payload = await request.json(default={})
         payload = payload if isinstance(payload, dict) else {}
         binding_id = str(payload.get("binding_id") or "").strip()

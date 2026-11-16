@@ -98,7 +98,7 @@ async def test_state_is_structured(monkeypatch: Any) -> None:
     state = router.state
     assert "target" not in state
     # 没有身份回调时退化成「我」，state 始终有 self 键。
-    assert state["self"] == {"name": "我"}
+    assert state["self"] == {"role_name": "我"}
     assert state["now"] == {"date_time": "2026-11-04 05:40:00", "weekday": "周三"}
     # 私聊不带发送者 ID，对方昵称放进 scene。
     assert state["scene"] == {"type": "private", "peer_name": "Lion"}
@@ -129,7 +129,10 @@ async def test_state_carries_own_name(monkeypatch: Any) -> None:
 
     await judge.judge(_rule(True), UMO, buffer, datetime.now(TZ))
 
-    assert router.state["self"] == {"name": "蓝色小肥鱼", "id": "2670210348"}
+    assert router.state["self"] == {
+        "role_name": "蓝色小肥鱼",
+        "role_id": "2670210348",
+    }
 
 
 @pytest.mark.asyncio
@@ -150,7 +153,7 @@ async def test_state_self_falls_back_when_name_empty(monkeypatch: Any) -> None:
 
     await judge.judge(_rule(False), UMO, buffer, datetime.now(TZ))
 
-    assert router.state["self"] == {"name": "我"}
+    assert router.state["self"] == {"role_name": "我"}
 
 
 @pytest.mark.asyncio

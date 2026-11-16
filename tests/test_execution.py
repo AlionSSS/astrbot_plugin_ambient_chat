@@ -869,7 +869,7 @@ async def test_retry_after_preheat_failure_actually_preheats_again(tmp_path):
 
 @pytest.mark.asyncio
 async def test_attention_is_credited_with_the_judged_fresh_ratio():
-    """记账份量来自判定结果：执行层把 fresh_ratio 原样交给关注度档案（ADR-0035）。"""
+    """记账份量来自判定结果：执行层把 fresh_ratio 原样交给关注度档案（ADR-0012）。"""
     h = Harness()
     h.judge.judge = AsyncMock(
         return_value=IntentResult(True, scores=(0.9, 0.2), fresh_ratio=0.25)

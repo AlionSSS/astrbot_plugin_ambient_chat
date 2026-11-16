@@ -300,29 +300,54 @@ def test_poke_plus_attachment_keeps_both() -> None:
     ]
 
 
-def test_entry_marks_mention_and_reply_to_self() -> None:
-    """@ 了机器人 / 引用了机器人，只在条目上带事实标记。"""
+def test_at_and_reply_parts_carry_target_role_id() -> None:
+    """@ 与引用作为段下发目标 ID，且不带仅供渲染的 ``is_self``（ADR-0009）。"""
     entry = _entry(
         ChatMessage(
             sender_name="小红",
             text="这游戏不错",
             timestamp=TS,
             sender_id="123456",
-            mentions_me=True,
-            replies_me=True,
+            parts=(
+                {"type": "at", "target_role_id": "10000", "is_self": True},
+                {"type": "reply", "target_role_id": "10000", "is_self": True},
+                {"type": "text"},
+            ),
         )
     )
 
-    assert entry["mentions_me"] is True
-    assert entry["replies_me"] is True
+    assert entry["parts"] == [
+        {"type": "at", "target_role_id": "10000"},
+        {"type": "reply", "target_role_id": "10000"},
+        {"type": "text", "content": "这游戏不错"},
+    ]
+    assert "mentions_me" not in entry
+    assert "replies_me" not in entry
+
+
+def test_at_without_target_is_dropped() -> None:
+    """历史里凑不出目标 ID 时宁可少一段，也不能下发一个空 @。"""
+    entry = _entry(
+        ChatMessage(
+            sender_name="小红",
+            text="这游戏不错",
+            timestamp=TS,
+            sender_id="123456",
+            parts=({"type": "at"}, {"type": "text"}),
+        )
+    )
+
+    assert entry["type"] == "text"
     assert entry["content"] == "这游戏不错"
 
 
-def test_entry_has_no_addressing_flags_by_default() -> None:
+def test_plain_entry_has_no_decoration_segments() -> None:
     entry = _entry(
         ChatMessage(sender_name="小红", text="在吗", timestamp=TS, sender_id="123456")
     )
 
+    assert entry["type"] == "text"
+    assert "parts" not in entry
     assert "mentions_me" not in entry
     assert "replies_me" not in entry
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from astrbot_plugin_ambient_chat.rules.models import DecisionModel, RuleError, Settings
 from astrbot_plugin_ambient_chat.rules.store import RuleStore
+from astrbot_plugin_ambient_chat.speech import decision as decision_module
 from astrbot_plugin_ambient_chat.speech.decision import (
     DecisionContentRejected,
     DecisionRouter,
@@ -237,5 +239,102 @@ async def test_router_marks_content_rejection_apart_from_other_failures(
     try:
         with pytest.raises(DecisionContentRejected, match="内容审核"):
             await router.probabilities("custom:dm_test", {"q": NoulPrompt("是吗？")})
+    finally:
+        await router.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_log_their_own_request_and_response(tmp_path) -> None:
+    """并发判断各记各的：A 抢在 B 之后返回时，不能把 B 的响应写进 A 的记录。"""
+    store = RuleStore(tmp_path)
+    store.settings.decision_models = [DecisionModel.parse(MODEL_PAYLOAD)]
+    store.settings.decision_debug_enabled = True
+    b_answered = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        marker = json.loads(request.content)["state"]["marker"]
+        if marker == "A":
+            # A 先发出、后返回：旧实现此时读到的「最近一次」已是 B 的数据。
+            await b_answered.wait()
+        else:
+            b_answered.set()
+        return httpx.Response(
+            200,
+            json={"answers": {"q": {"noul": 0.1 if marker == "A" else 0.9}}},
+        )
+
+    router = DecisionRouter(
+        None,  # type: ignore[arg-type]
+        store,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await asyncio.gather(
+            router.probabilities(
+                "custom:dm_test", {"q": NoulPrompt("是吗？")}, {"marker": "A"}
+            ),
+            router.probabilities(
+                "custom:dm_test", {"q": NoulPrompt("是吗？")}, {"marker": "B"}
+            ),
+        )
+    finally:
+        await router.close()
+
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "decision_debug").glob("*.json")
+    ]
+    assert len(records) == 2
+    by_marker = {record["request"]["state"]["marker"]: record for record in records}
+    assert by_marker["A"]["response"]["answers"]["q"]["noul"] == 0.1
+    assert by_marker["B"]["response"]["answers"]["q"]["noul"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_concurrent_config_change_keeps_one_client(tmp_path, monkeypatch) -> None:
+    """配置变更时的并发替换只能留下一个客户端，被换掉的必须关闭。"""
+    store = RuleStore(tmp_path)
+    store.settings.decision_models = [DecisionModel.parse(MODEL_PAYLOAD)]
+    created: list[Any] = []
+    closed: list[int] = []
+    real_client = decision_module.SystemOneClient
+
+    def factory(config, *, transport=None):
+        client = real_client(config, transport=transport)
+        created.append(client)
+        original_close = client.close
+
+        async def close() -> None:
+            closed.append(id(client))
+            # 真实环境里关闭连接池会真正让出控制权，这里显式模拟同一次让出。
+            await asyncio.sleep(0)
+            await original_close()
+
+        client.close = close
+        return client
+
+    monkeypatch.setattr(decision_module, "SystemOneClient", factory)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"answers": {"q": {"noul": 0.5}}})
+
+    router = DecisionRouter(
+        None,  # type: ignore[arg-type]
+        store,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        await router.probabilities("custom:dm_test", {"q": NoulPrompt("是吗？")})
+        # 换模型名：指纹变化，两个并发判断会同时发现旧客户端已过期。
+        store.settings.decision_models = [
+            DecisionModel("dm_test", "test", BASE_URL, "m2")
+        ]
+        await asyncio.gather(
+            router.probabilities("custom:dm_test", {"q": NoulPrompt("是吗？")}),
+            router.probabilities("custom:dm_test", {"q": NoulPrompt("是吗？")}),
+        )
+        assert len(created) == 2, "并发替换不能重复建客户端"
+        assert len(router._clients) == 1
+        assert closed == [id(created[0])], "只有被换掉的旧客户端该关闭"
     finally:
         await router.close()
