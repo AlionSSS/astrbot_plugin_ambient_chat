@@ -188,11 +188,16 @@ function syncIntentFields() {
   const decisionMode = modeInput.value === 'decision';
   // 两种机制各自只用一部分字段：用不到的整块隐藏，只留下当前机制要填的项。
   const activePaths = decisionMode
-    ? ['intent.decision_provider_id', 'intent.threshold']
+    ? [
+        'intent.decision_provider_id',
+        'intent.interest_threshold',
+        'intent.new_topic_threshold',
+      ]
     : ['intent.pass_probability'];
   for (const path of [
     'intent.decision_provider_id',
-    'intent.threshold',
+    'intent.interest_threshold',
+    'intent.new_topic_threshold',
     'intent.pass_probability',
   ]) {
     const input = document.querySelector(`#rule-editor [data-path="${path}"]`);
@@ -204,7 +209,8 @@ function syncIntentFields() {
   const hint = $('#intent-hint');
   if (hint) {
     hint.textContent = decisionMode
-      ? '决策模型会先给当前会话的消息打分，达到阈值视为对会话内容感兴趣或想发起新话题，才会发言。' +
+      ? '决策模型会先给当前会话的消息打分：达到「感兴趣阈值」就接一句，' +
+        '否则达到「新话题阈值」就起个新话题；两条线互不影响，默认 0.7 / 0.5。' +
         '下拉里带「（自定义）」的项来自「更多设置」的决策模型配置。'
       : '当前为按概率放行：只要通过第 2 步「拦截」，就按设定概率决定是否发言；' +
         '放行概率填 100 等于每次都发言，填 0 等于从不发言，决策模型不参与判断。';

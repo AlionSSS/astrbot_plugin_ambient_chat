@@ -51,8 +51,7 @@ REASON_DETAIL_LIMIT = 160
 """失败原因在页面上最多显示的字符数，完整信息仍写进 WARNING 与调试日志。"""
 
 _TIME_FIT_TIP = (
-    "请让这句话贴合当下的时间与对话间隔：问候、吃饭、睡觉、上下班这类内容要和现在"
-    "对得上，也不要接一个已经过去很久的话头。"
+    "请让这句话贴合当下的时间、语境。"
 )
 """三条提示共用的时间要求。
 
@@ -242,14 +241,14 @@ class IntentJudge:
         # 判定成功才把这段内容记为已记账：失败时下次重试仍算新内容，
         # 一份证据不会因为一次抖动被永久吞掉（ADR-0035）。
         buffer.mark_judged(umo, used)
-        threshold = rule.intent.threshold
+        # 两条线各自独立：接话看「感兴趣」，冷场主动开口看「新话题」。
         interested = probabilities.get("interested", 0.0)
         new_topic = probabilities.get("want_new_topic", 0.0)
         # 运行管理页的「上次结果」只展示这一个字符串：结论在前，括号里固定
         # 带上两个判定值，落选的那项也能看出打了多少分。
         scores = f"感兴趣 {interested:.2f} / 新话题 {new_topic:.2f}"
         metric = (interested, new_topic)
-        if interested >= threshold:
+        if interested >= rule.intent.interest_threshold:
             return IntentResult(
                 True,
                 MODE_CONTINUE,
@@ -257,7 +256,7 @@ class IntentJudge:
                 scores=metric,
                 fresh_ratio=fresh_ratio,
             )
-        if new_topic >= threshold * 3 / 5:
+        if new_topic >= rule.intent.new_topic_threshold:
             return IntentResult(
                 True,
                 MODE_NEW_TOPIC,

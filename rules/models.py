@@ -51,7 +51,10 @@ from ..speech.segments import (
 )
 
 DEFAULT_CONTEXT_TURNS = 20
-DEFAULT_THRESHOLD = 0.7
+DEFAULT_INTEREST_THRESHOLD = 0.7
+"""「是否感兴趣 → 接话」的默认通过线。"""
+DEFAULT_NEW_TOPIC_THRESHOLD = 0.5
+"""「是否想开新话题」的默认通过线，比接话更容易触发，冷场时更主动。"""
 DEFAULT_PASS_PROBABILITY = 1.0
 """「按概率放行」的默认概率：默认必定发言，调低才按概率放弃。"""
 DEFAULT_COOLDOWN_MINUTES = 5
@@ -557,7 +560,10 @@ class IntentConfig:
 
     mode: str = INTENT_DIRECT
     decision_provider_id: str = ""
-    threshold: float = DEFAULT_THRESHOLD
+    interest_threshold: float = DEFAULT_INTEREST_THRESHOLD
+    """「是否感兴趣 → 接话」的通过线，0~1。"""
+    new_topic_threshold: float = DEFAULT_NEW_TOPIC_THRESHOLD
+    """「是否想开新话题」的通过线，0~1，与接话各用一条线。"""
     pass_probability: float = DEFAULT_PASS_PROBABILITY
     """「按概率放行」模式下每次发言的概率，0~1；1.0 即必定发言。"""
 
@@ -565,7 +571,8 @@ class IntentConfig:
         return {
             "mode": self.mode,
             "decision_provider_id": self.decision_provider_id,
-            "threshold": self.threshold,
+            "interest_threshold": self.interest_threshold,
+            "new_topic_threshold": self.new_topic_threshold,
             "pass_probability": self.pass_probability,
         }
 
@@ -578,12 +585,15 @@ class IntentConfig:
         mode = str(raw.get("mode") or INTENT_DIRECT).strip()
         if mode not in (INTENT_DIRECT, INTENT_DECISION):
             raise RuleError(f"未知的发言意向机制：{mode}")
-        try:
-            threshold = float(raw.get("threshold", DEFAULT_THRESHOLD))
-        except (TypeError, ValueError) as exc:
-            raise RuleError("判定阈值必须是数字") from exc
-        if not 0.0 <= threshold <= 1.0:
-            raise RuleError("判定阈值需在 0~1 之间")
+        # 旧规则的单一 `threshold` 读成「感兴趣阈值」：升级不丢用户调过的松紧。
+        interest_threshold = _parse_threshold(
+            raw.get("interest_threshold", raw.get("threshold", DEFAULT_INTEREST_THRESHOLD)),
+            "感兴趣阈值",
+        )
+        new_topic_threshold = _parse_threshold(
+            raw.get("new_topic_threshold", DEFAULT_NEW_TOPIC_THRESHOLD),
+            "新话题阈值",
+        )
         try:
             probability = float(raw.get("pass_probability", DEFAULT_PASS_PROBABILITY))
         except (TypeError, ValueError) as exc:
@@ -593,9 +603,21 @@ class IntentConfig:
         return cls(
             mode=mode,
             decision_provider_id=str(raw.get("decision_provider_id") or "").strip(),
-            threshold=threshold,
+            interest_threshold=interest_threshold,
+            new_topic_threshold=new_topic_threshold,
             pass_probability=probability,
         )
+
+
+def _parse_threshold(value: Any, label: str) -> float:
+    """把一条判定通过线解析成 0~1 的浮点，非法值直接报错。"""
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuleError(f"{label}必须是数字") from exc
+    if not 0.0 <= threshold <= 1.0:
+        raise RuleError(f"{label}需在 0~1 之间")
+    return threshold
 
 
 @dataclass(slots=True)

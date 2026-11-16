@@ -72,7 +72,8 @@ export function blankRule() {
       // 判断提供商留空时取 AstrBot 的默认判断提供商，没配置会在弹窗里直接提示。
       mode: 'decision',
       decision_provider_id: '',
-      threshold: 0.7,
+      interest_threshold: 0.7,
+      new_topic_threshold: 0.5,
       pass_probability: 1,
     },
     chat_provider_id: '',
@@ -83,7 +84,14 @@ export function blankRule() {
 
 export function normalizeRule(rule) {
   rule.context_turns = Number(rule.context_turns) || 20;
-  rule.intent.threshold = Number(rule.intent.threshold);
+  // 历史规则只有一个 `threshold`：读成「感兴趣阈值」，新话题阈值缺省 0.5。
+  const interest = Number(
+    rule.intent.interest_threshold ?? rule.intent.threshold,
+  );
+  rule.intent.interest_threshold = Number.isFinite(interest) ? interest : 0.7;
+  delete rule.intent.threshold;
+  const newTopic = Number(rule.intent.new_topic_threshold);
+  rule.intent.new_topic_threshold = Number.isFinite(newTopic) ? newTopic : 0.5;
   // 历史规则没有该字段：缺省按 100% 处理，与后端默认值一致。
   const probability = Number(rule.intent.pass_probability);
   rule.intent.pass_probability = Number.isFinite(probability) ? probability : 1;
