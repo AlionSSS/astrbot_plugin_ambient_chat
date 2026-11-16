@@ -85,13 +85,13 @@ _HINT_TEXT = {
     MODE_DIRECT: HINT_DIRECT,
 }
 
-DECISION_STATE_CHAR_BUDGET = 6500
+DECISION_STATE_CHAR_BUDGET = 7000
 """判定请求里 ``state``（conversation 消息条目 + persona）的字符预算。
 
 ``intern-decision-4b`` 的上下文是 8K。实测（书生端砚，中文群聊）真实请求的
 token/字符比约 **0.72**：3703 字符的请求体对应 2686 input tokens。按 ADR-0009
-最初的「1 字 ≈ 1 token」最坏假设，6500 字符 + questions（约 380 字符）仍低于
-8192；按实测比例则只用掉约 61% 的窗口（ADR-0009）。
+最初的「1 字 ≈ 1 token」最坏假设，7000 字符 + questions（约 380 字符）仍低于
+8192；按实测比例则只用掉约 62% 的窗口（ADR-0009）。
 
 成本按条目序列化后的 JSON 文本计，key 与引号的开销已算在内。
 """
