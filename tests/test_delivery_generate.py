@@ -48,7 +48,7 @@ async def test_generate_failure_returns_none() -> None:
 class _ProviderContext:
     """只回答「这个模型支持哪些模态」。"""
 
-    def __init__(self, modalities: list[str]) -> None:
+    def __init__(self, modalities: list[str] | None) -> None:
         self._modalities = modalities
 
     def get_provider_by_id(self, _provider_id: str) -> Any:
@@ -71,5 +71,25 @@ def test_audio_capability_follows_provider_modalities() -> None:
     text_only = Delivery(_ProviderContext(["image"]), ContextBuffer())  # type: ignore[arg-type]
 
     assert supports._allows_audio("p")
-    assert unconfigured._allows_audio("p")
+    assert not unconfigured._allows_audio("p")
     assert not text_only._allows_audio("p")
+
+
+@pytest.mark.parametrize("modalities", [None, [], ["text"], ["tool_use"]])
+def test_undeclared_modalities_mean_no_media(modalities: list[str] | None) -> None:
+    """未声明就是不支持：空列表、缺失与读不到配置都不能放行媒体。"""
+    delivery = Delivery(_ProviderContext(modalities), ContextBuffer())  # type: ignore[arg-type]
+
+    assert not delivery._allows_images("p")
+    assert not delivery._allows_audio("p")
+
+
+def test_provider_lookup_failure_means_no_media() -> None:
+    class Missing:
+        def get_provider_by_id(self, _provider_id: str) -> Any:
+            raise LookupError("provider 不存在")
+
+    delivery = Delivery(Missing(), ContextBuffer())  # type: ignore[arg-type]
+
+    assert not delivery._allows_images("p")
+    assert not delivery._allows_audio("p")

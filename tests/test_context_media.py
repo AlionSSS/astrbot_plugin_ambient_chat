@@ -299,6 +299,24 @@ async def test_cancelled_close_request_does_not_abandon_writer_cleanup(
     assert not buffer.media_root.exists()
 
 
+def test_bmp_source_is_reencoded_to_a_model_supported_format(tmp_path):
+    """BMP 不在任何一家多模态模型的支持列表里，落盘必须转成 JPEG / PNG。
+
+    否则缓存路径会原样传出 ``data:image/bmp``，请求必然被拒（见 ``_DIRECT_COPY_FORMATS``）。
+    """
+    PILImage = pytest.importorskip("PIL.Image")
+    source = tmp_path / "shot.bmp"
+    PILImage.new("RGB", (64, 64), (255, 0, 0)).save(source)
+    target = tmp_path / "out"
+    target.mkdir()
+
+    saved = media_store._save_image(source, target, "stem", ".bmp", 1280, 80)
+
+    assert saved is not None
+    assert saved.suffix in {".jpg", ".png"}
+    assert saved.exists()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "cancel", "failure"])
 async def test_delivery_holds_images_only_for_the_active_model_request(
@@ -324,6 +342,9 @@ async def test_delivery_holds_images_only_for_the_active_model_request(
         return SimpleNamespace(completion_text="看到了")
 
     context = SimpleNamespace(
+        get_provider_by_id=lambda _: SimpleNamespace(
+            provider_config={"modalities": ["text", "image"]}
+        ),
         llm_generate=generate,
         conversation_manager=SimpleNamespace(
             get_curr_conversation_id=AsyncMock(return_value="cid")
@@ -357,7 +378,7 @@ async def test_delivery_holds_images_only_for_the_active_model_request(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "modalities,expected",
-    [(["text"], False), (["image", "text"], True), ([], True), (None, True)],
+    [(["text"], False), (["image", "text"], True), ([], False), (None, False)],
 )
 async def test_delivery_reads_provider_image_capability_each_request(
     buffer, source, modalities, expected

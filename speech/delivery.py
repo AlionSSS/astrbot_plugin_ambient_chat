@@ -122,23 +122,27 @@ class Delivery:
 
     # ------------------------------------------------------------------ 生成
     def _allows_images(self, provider_id: str) -> bool:
-        """仅在供应商明确未启用图片能力时跳过图片；每次读取以跟随配置变更。"""
+        """只有供应商明确声明了图片能力才带图；每次读取以跟随配置变更。"""
         return self._supports_modality(provider_id, "image")
 
     def _allows_audio(self, provider_id: str) -> bool:
-        """音频能力同理：只有明确不含 ``audio`` 时才跳过，避免白带音频报错。"""
+        """音频能力同理：未声明就不带，避免白带一份必然被拒的附件。"""
         return self._supports_modality(provider_id, "audio")
 
     def _supports_modality(self, provider_id: str, modality: str) -> bool:
+        """供应商声明的模态能力；未声明即视为不支持。
+
+        模态能力只有 ``provider_config["modalities"]`` 一个来源：模型真实能力
+        无法在请求前探测，而未声明的附件只会换来一次失败请求（核心对音频没有
+        失败回退，图片也只在特定错误码上兜底）。因此这里按「未声明 = 不支持」
+        从紧处理——少带一份附件是可接受的降级，带上去白烧一次请求不是。
+        """
         try:
             provider = self._context.get_provider_by_id(provider_id)
             modalities = provider.provider_config.get("modalities")
         except Exception:  # noqa: BLE001
-            return True
-        # 与核心迁移语义一致：空列表不是明确的能力限制。
-        return (
-            not isinstance(modalities, list) or not modalities or modality in modalities
-        )
+            return False
+        return isinstance(modalities, list) and modality in modalities
 
     async def _generate(
         self,

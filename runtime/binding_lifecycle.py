@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from astrbot.api import logger
 
 from ..conversation.messages import ChatMessage
 from ..rules.models import Binding, RuleError
@@ -53,6 +56,8 @@ class BindingLifecycle:
         self._cleanup: set[str] = set()
         self._stopping: set[str] = set()
         self._loads: set[asyncio.Task] = set()
+        self._ffmpeg_warned = False
+        """已提示过「语音缓存开着但系统没有 ffmpeg」；关闭开关时复位，开启即可重查。"""
         # 私有协作 seam：在同步提交内校验并观察成功发布，避免 Web 调用方漏通知。
         self._store._binding_guard = self._guard_edit
         self._store._on_commit = self._committed
@@ -294,6 +299,7 @@ class BindingLifecycle:
             quality=settings.image_quality,
             audio_enabled=settings.cache_audio,
         )
+        self._check_audio_transcoding(settings.cache_audio)
         for bid in list(self._cleanup):
             if not self._plugin.execution.is_idle(bid):
                 continue
@@ -333,6 +339,26 @@ class BindingLifecycle:
         for bid in list(self._stopping):
             if bid not in self._cleanup and self._plugin.execution.is_idle(bid):
                 self._stopping.discard(bid)
+
+    def _check_audio_transcoding(self, audio_enabled: bool) -> None:
+        """开启语音缓存时确认核心能转码：缺 ffmpeg 会让语音被静默丢弃。
+
+        转码发生在核心侧（silk/amr → wav），失败只留一条 warning 并把该段语音
+        丢掉，模型最终只看到 ``[语音]`` 占位——不在这里点明，用户只能靠翻日志
+        才发现「开了语音缓存却从没生效」。每次关闭开关都复位提示，重新开启
+        会再查一次，装好 ffmpeg 后重开即可确认。
+        """
+        if not audio_enabled or shutil.which("ffmpeg"):
+            self._ffmpeg_warned = False
+            return
+        if self._ffmpeg_warned:
+            return
+        self._ffmpeg_warned = True
+        logger.warning(
+            "[Ambient] 已开启语音缓存，但系统里找不到 ffmpeg：核心无法把 "
+            "silk/amr 语音转成模型可接受的 wav，这些语音不会随请求发送，"
+            "模型只会看到 [语音] 占位。安装 ffmpeg 后可重新关闭再开启该开关。"
+        )
 
     def snapshot(self) -> dict[str, dict[str, Any]]:
         self._refresh()

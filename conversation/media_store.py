@@ -96,14 +96,19 @@ MAX_CONCURRENT_COMPRESSIONS = 2
 压缩是后台任务，排队多花一点时间用户无感，所以闸门收紧到 2。
 """
 
-_SUFFIXES_BY_FORMAT: dict[str, tuple[str, ...]] = {
+_DIRECT_COPY_FORMATS: dict[str, tuple[str, ...]] = {
     "JPEG": (".jpg", ".jpeg"),
     "PNG": (".png",),
     "WEBP": (".webp",),
     "GIF": (".gif",),
-    "BMP": (".bmp",),
 }
-"""后缀与真实格式一致时，原文件才能直接沿用到缓存目录。"""
+"""后缀与真实格式一致、且对话模型确实接受的格式，才能原样沿用到缓存目录。
+
+BMP 等格式虽然能解码，但不在任何一家多模态模型的支持列表里
+（OpenAI：png/jpeg/webp/gif，Anthropic：jpeg/png/gif/webp，Gemini 同理），
+原样存下来会以 ``data:image/bmp`` 发出去并被必然拒掉。因此这里的键只放
+「能直接进请求」的格式，其余一律走重编码，统一转成 JPEG / PNG。
+"""
 
 
 class MediaStore:
@@ -383,8 +388,8 @@ def _save_image(
                     source.name,
                 )
                 return None
-            # 后缀与真实格式一致时，原文件才能直接沿用到缓存目录。
-            trustworthy = suffix in _SUFFIXES_BY_FORMAT.get(image.format or "", ())
+            # 后缀与真实格式一致、且模型能接受时，原文件才能直接沿用到缓存目录。
+            trustworthy = suffix in _DIRECT_COPY_FORMATS.get(image.format or "", ())
             if (
                 trustworthy
                 and size <= COMPRESS_THRESHOLD_BYTES
