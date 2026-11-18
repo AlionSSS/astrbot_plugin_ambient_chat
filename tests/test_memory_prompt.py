@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +18,7 @@ from astrbot_plugin_ambient_chat.rules.models import Rule, Settings
 from astrbot_plugin_ambient_chat.speech.delivery import Delivery, build_prompt
 from astrbot_plugin_ambient_chat.speech.intent import IntentJudge
 from astrbot_plugin_ambient_chat.speech.memory import (
+    MemoryRecall,
     memory_entries,
     recall_memories,
     recall_query,
@@ -25,8 +29,10 @@ UMO = "aiocqhttp:GroupMessage:123456"
 NOW = datetime(2026, 11, 18, 21, 30, tzinfo=TZ)
 
 
-def _item(content: str, *, score: float = 0.9) -> MemoryItem:
-    return MemoryItem(memory_id=1, content=content, score=score)
+def _item(
+    content: str, *, score: float = 0.9, created_at: float | None = None
+) -> MemoryItem:
+    return MemoryItem(memory_id=1, content=content, score=score, created_at=created_at)
 
 
 def _rule() -> Rule:
@@ -44,11 +50,18 @@ def _rule() -> Rule:
 class _Router:
     def __init__(self) -> None:
         self.state: dict[str, Any] = {}
+        self.debug_meta: Any = None
 
     async def probabilities(
-        self, provider_id: str | None, prompts: Any, state: Any = None
+        self,
+        provider_id: str | None,
+        prompts: Any,
+        state: Any = None,
+        *,
+        debug_meta: Any = None,
     ) -> dict[str, float]:
         self.state = dict(state or {})
+        self.debug_meta = debug_meta
         return {"interested": 0.1, "want_new_topic": 0.2}
 
 
@@ -115,7 +128,9 @@ async def test_recall_memories_respects_switch() -> None:
     recall = _Recall()
     messages = _buffer().recent(UMO, 10)
 
-    assert await recall_memories(recall, Settings(), UMO, messages) == []
+    recalled = await recall_memories(recall, Settings(), UMO, messages)
+
+    assert recalled.items == () and recalled.query == ""
     assert recall.calls == []
 
 
@@ -124,8 +139,11 @@ async def test_recall_memories_forwards_settings() -> None:
     recall = _Recall()
     messages = _buffer().recent(UMO, 10)
 
-    await recall_memories(recall, _enabled(), UMO, messages)
+    recalled = await recall_memories(recall, _enabled(), UMO, messages)
 
+    # 查询词随结果一起回来：调试日志靠它还原这次检索。
+    assert recalled.query == recall.calls[0]["query"]
+    assert [item.content for item in recalled] == ["用户周五去上海出差"]
     assert recall.calls[0]["k"] == 2
     # 群聊按最近几个不同发送者并联（默认 3），这里只有两个人且都非 bot。
     assert recall.calls[0]["senders"] == [("43", "小明"), ("42", "Lion")]
@@ -184,6 +202,36 @@ async def test_judge_puts_memories_into_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_judge_hands_recall_snapshot_to_decision_debug() -> None:
+    """决策调试日志多带一份查询词与完整结果，state 里只有裁好的条目。"""
+    router = _Router()
+    judge = IntentJudge(None, router)  # type: ignore[arg-type]
+    recalled = MemoryRecall(
+        query="周五 上海",
+        items=(
+            _item("用户周五去上海出差", created_at=1762000000.0),
+            _item("用户下周回北京"),
+        ),
+    )
+
+    await judge.judge(_rule(), UMO, _buffer(), NOW, memories=recalled)
+
+    payload = router.debug_meta["memory_recall"]
+    assert payload["query"] == "周五 上海"
+    assert [item["content"] for item in payload["items"]] == [
+        "用户周五去上海出差",
+        "用户下周回北京",
+    ]
+    # 记录时间按判定用的时区渲染；缺失时留空，不编造时间。
+    first, second = payload["items"]
+    assert first["created_at"] == pytest.approx(1762000000.0)
+    assert first["created_at_text"] == datetime.fromtimestamp(1762000000.0, TZ).strftime(
+        "%Y-%m-%d %H:%M"
+    )
+    assert second["created_at"] is None and second["created_at_text"] is None
+
+
+@pytest.mark.asyncio
 async def test_judge_without_memories_omits_state_key() -> None:
     router = _Router()
     judge = IntentJudge(None, router)  # type: ignore[arg-type]
@@ -223,48 +271,100 @@ def test_build_prompt_without_memory_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_delivery_reuses_given_memories_without_recalling() -> None:
-    recall = _Recall()
+    client = _Recall()
     delivery = Delivery(
         object(),  # type: ignore[arg-type]
         _buffer(),
         settings=_enabled,
-        recall=recall,  # type: ignore[arg-type]
+        recall=client,  # type: ignore[arg-type]
     )
 
-    block = await delivery._memory_block(
-        UMO, _buffer().recent(UMO, 10), [_item("用户周五去上海出差")], "p1"
+    recalled = await delivery._memory_recall(
+        UMO,
+        _buffer().recent(UMO, 10),
+        MemoryRecall(query="出差", items=(_item("用户周五去上海出差"),)),
     )
+    block = delivery._memory_block(recalled, "p1")
 
     assert "用户周五去上海出差" in block
-    assert recall.calls == []
+    assert recalled is not None and recalled.query == "出差"
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
 async def test_delivery_empty_reused_memories_does_not_recall_again() -> None:
-    """执行层召回没命中时传空列表，生成侧不该再打一次请求。"""
-    recall = _Recall()
+    """执行层召回没命中时传空快照，生成侧不该再打一次请求。"""
+    client = _Recall()
     delivery = Delivery(
         object(),  # type: ignore[arg-type]
         _buffer(),
         settings=_enabled,
-        recall=recall,  # type: ignore[arg-type]
+        recall=client,  # type: ignore[arg-type]
     )
 
-    assert await delivery._memory_block(UMO, _buffer().recent(UMO, 10), [], "p1") == ""
-    assert recall.calls == []
+    recalled = await delivery._memory_recall(UMO, _buffer().recent(UMO, 10), [])
+
+    assert delivery._memory_block(recalled, "p1") == ""
+    assert recalled is not None and recalled.query == ""
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
 async def test_delivery_recalls_when_not_given_memories() -> None:
-    recall = _Recall()
+    client = _Recall()
     delivery = Delivery(
         object(),  # type: ignore[arg-type]
         _buffer(),
         settings=_enabled,
-        recall=recall,  # type: ignore[arg-type]
+        recall=client,  # type: ignore[arg-type]
     )
 
-    block = await delivery._memory_block(UMO, _buffer().recent(UMO, 10), None, "p1")
+    recalled = await delivery._memory_recall(
+        UMO, _buffer().recent(UMO, 10), None
+    )
 
-    assert "用户周五去上海出差" in block
-    assert len(recall.calls) == 1
+    assert "用户周五去上海出差" in delivery._memory_block(recalled, "p1")
+    assert len(client.calls) == 1
+    assert recalled is not None and recalled.query == client.calls[0]["query"]
+
+
+class _GenerationContext:
+    """生成侧所需的最小上下文：会话 ID、供应商与一次成功的生成。"""
+
+    conversation_manager = SimpleNamespace(
+        get_curr_conversation_id=AsyncMock(return_value="conversation")
+    )
+
+    async def get_current_chat_provider_id(self, _umo: str) -> str:
+        return "p1"
+
+    def get_provider_by_id(self, _provider_id: str) -> Any:
+        return SimpleNamespace(provider_config={"modalities": []})
+
+    async def llm_generate(self, **_kwargs: Any) -> Any:
+        return SimpleNamespace(completion_text="好呀")
+
+
+@pytest.mark.asyncio
+async def test_delivery_hands_recall_snapshot_to_chat_debug(tmp_path) -> None:
+    """生成侧的调试日志要能看出「拿什么查的、查回了什么」，而不只是注入后的文本。"""
+    settings = Settings.parse(
+        {"memory_recall_enabled": True, "chat_debug_enabled": True}
+    )
+    delivery = Delivery(
+        _GenerationContext(),  # type: ignore[arg-type]
+        _buffer(),
+        settings=lambda: settings,
+        recall=_Recall(),  # type: ignore[arg-type]
+        data_dir=lambda: tmp_path,
+    )
+
+    speech = await delivery.prepare(_rule(), UMO, "接一句", now=NOW)
+
+    assert speech is not None
+    record = json.loads(
+        next((tmp_path / "chat_debug").glob("*.json")).read_text(encoding="utf-8")
+    )
+    recall_debug = record["meta"]["memory_recall"]
+    assert recall_debug["query"] == "周五要去上海出差 帮我带点特产"
+    assert recall_debug["items"][0]["content"] == "用户周五去上海出差"

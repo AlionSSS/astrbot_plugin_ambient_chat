@@ -253,7 +253,7 @@ async def test_cancelled_write_keeps_compression_slot_until_thread_finishes(
         writer.release.set()
         if second is not None:
             result = await second
-            store.discard(path for path, _ in result)
+            store.discard(item.path for item in result)
         await store.drain()
     assert writer.count == 2
     assert not list(store.root.rglob("*.*"))

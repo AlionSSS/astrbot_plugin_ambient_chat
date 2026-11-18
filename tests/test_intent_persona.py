@@ -32,6 +32,8 @@ class _Router:
         provider_id: str | None,
         prompts: Any,
         state: Any = None,
+        *,
+        debug_meta: Any = None,
     ) -> dict[str, float]:
         self.prompts = dict(prompts)
         self.state = dict(state or {})

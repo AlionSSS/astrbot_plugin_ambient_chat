@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from astrbot_plugin_ambient_chat.conversation import context_buffer
 from astrbot_plugin_ambient_chat.conversation.context_buffer import ContextBuffer
 from astrbot_plugin_ambient_chat.conversation.media_store import MediaStore
 from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
@@ -24,7 +25,9 @@ def configure(buffer, *, images=True, audio=True):
 
 
 def message(index=1):
-    return ChatMessage("小明", f"语音 {index}", index, kind="audio", attachments=("audio",))
+    return ChatMessage(
+        "小明", f"语音 {index}", index, kind="audio", attachments=("audio",)
+    )
 
 
 async def until(predicate):
@@ -116,7 +119,9 @@ async def test_disabling_audio_clears_cached_files_without_touching_images(
 async def test_bot_voice_is_not_cached(buffer, source):
     """机器人自己的语音不进媒体缓存：TTS 原文已在正文里，不需要再听一遍。"""
     configure(buffer)
-    entry = ChatMessage("我", "自己说的", 1, is_bot=True, kind="audio", attachments=("audio",))
+    entry = ChatMessage(
+        "我", "自己说的", 1, is_bot=True, kind="audio", attachments=("audio",)
+    )
 
     buffer.append(UMO, entry, audio_components=[source])
     await asyncio.sleep(0.01)
@@ -260,3 +265,111 @@ async def test_generation_with_only_voice_retries_once_without_audio(buffer, sou
     assert len(context.requests) == 2
     assert context.requests[0][1]
     assert not context.requests[1][0] and not context.requests[1][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind, prefix", [("image", "图片"), ("audio", "语音")])
+@pytest.mark.parametrize("overflow", [False, True])
+async def test_media_number_keeps_original_slot_after_capture_failure_or_quota(
+    buffer: ContextBuffer,
+    source: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    prefix: str,
+    overflow: bool,
+) -> None:
+    configure(buffer)
+    if overflow:
+        monkeypatch.setattr(
+            context_buffer, "MAX_MEDIA_BYTES_PER_SESSION", len(AUDIO_BYTES)
+        )
+    entry = ChatMessage(
+        "小明",
+        "分隔",
+        1,
+        parts=(
+            {"type": kind},
+            {"type": "text"},
+            {"type": kind},
+        ),
+    )
+    first = source if overflow else SimpleNamespace(path="")
+    buffer.append(UMO, entry, **{f"{kind}_components": [first, source]})
+    paths = (lambda: entry.images) if kind == "image" else (lambda: entry.audio)
+    await until(lambda: bool(paths()))
+
+    labels = buffer.media_labels([entry], image_limit=2, audio_limit=2)
+    assert len(paths()) == 1
+    assert entry.render_text(labels[id(entry)]) == f"[{prefix}] 分隔 [{prefix} 1]"
+
+
+@pytest.mark.asyncio
+async def test_audio_retry_uses_original_image_labels(
+    buffer: ContextBuffer,
+    source: SimpleNamespace,
+) -> None:
+    configure(buffer)
+    first = ChatMessage(
+        "小明",
+        "旧图",
+        1,
+        parts=(
+            {"type": "text"},
+            {"type": "image"},
+            {"type": "audio"},
+        ),
+    )
+    later = ChatMessage(
+        "小明",
+        "新图",
+        2,
+        parts=(
+            {"type": "text"},
+            {"type": "image"},
+        ),
+    )
+    buffer.append(UMO, first, image_components=[source], audio_components=[source])
+    allow_capture = asyncio.Event()
+
+    async def resolve_later_image() -> str:
+        await allow_capture.wait()
+        return source.path
+
+    buffer.append(
+        UMO,
+        later,
+        image_components=[
+            SimpleNamespace(convert_to_file_path=resolve_later_image),
+        ],
+    )
+    await until(lambda: bool(first.images and first.audio))
+
+    requests: list[dict[str, object]] = []
+
+    async def generate(**kwargs: object) -> SimpleNamespace:
+        requests.append(kwargs)
+        if kwargs["audio_urls"]:
+            # 模拟第一次请求等待期间，这张图才转存完毕。
+            allow_capture.set()
+            await until(lambda: bool(later.images))
+            raise RuntimeError("audio failed")
+        return SimpleNamespace(completion_text="好呀")
+
+    context = _MediaContext(["image", "audio"])
+    context.llm_generate = generate
+    speech = await Delivery(context, buffer).prepare(
+        SimpleNamespace(chat_provider_id="p1", context_turns=20),
+        UMO,
+        "接一句",
+        "",
+        datetime(2026, 11, 6, 12, tzinfo=timezone.utc),
+    )
+
+    assert speech is not None
+    assert len(requests) == 2
+    assert requests[1]["image_urls"] == requests[0]["image_urls"] == list(first.images)
+    assert requests[1]["audio_urls"] is None
+    prompt = str(requests[1]["prompt"])
+    assert "旧图 [图片 1] [语音]" in prompt
+    assert "新图 [图片]" in prompt
+    assert "[图片 2]" not in prompt

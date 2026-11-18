@@ -219,13 +219,19 @@ class LivingMemoryRecall:
         platform_name = _platform_name(self._context, _platform_id(umo))
         if not self._scope_usable(config, umo, pairs):
             return []
-        # 供 LivingMemory 判定黑白名单/人格/适配器边界；发送者身份单独用于算 user 作用域，
-        # 不参与这条 access 判定，避免「名单里第一个人」这种随机结果。
-        ref = (
-            event
-            if event is not None
-            else _SessionRef(umo, platform_name=platform_name)
-        )
+        ref = event
+        if ref is None:
+            # 私聊可像真实事件一样按对端身份过白名单；群聊仍只按会话授权。
+            target = parse_target(umo)
+            sender = ("", "")
+            if pairs and target and target.message_type == FRIEND_MESSAGE:
+                sender = pairs[0]
+            ref = _SessionRef(
+                umo,
+                platform_name=platform_name,
+                sender_id=sender[0],
+                sender_name=sender[1],
+            )
 
         budget = self._timeout if timeout is None else float(timeout)
         try:
@@ -345,12 +351,15 @@ class LivingMemoryRecall:
         async with _open_access(config, self._context, ref) as access:
             if access is None:
                 return []
-            if not bool(getattr(access, "allowed", True)):
+            if not bool(getattr(access, "allowed", False)):
                 logger.debug("[Ambient] LivingMemory 判定本会话不可记忆，跳过召回")
                 return []
-            scope, extra = _scope_filter(
+            scopes = _scope_filter(
                 config, access, umo=umo, platform_name=platform_name, pairs=pairs
             )
+            if scopes is None:
+                return []
+            scope, extra = scopes
             kwargs: dict[str, Any] = {
                 "query": query,
                 "k": k,
@@ -612,8 +621,10 @@ def _scope_filter(
     umo: str,
     platform_name: str,
     pairs: Sequence[SenderRef],
-) -> tuple[str | None, list[str]]:
+) -> tuple[str | None, list[str]] | None:
     """算出本次检索的 ``(主作用域, 并联作用域)``。
+
+    返回 ``None`` 表示必要作用域解析失败，必须跳过召回；不能把它当成无过滤。
 
     - 非 ``user`` 模式：主作用域由 LivingMemory 自己解析（umo / global / None）；
     - ``user`` 模式：记忆按人存，主作用域必须由发送者身份算，多个发送者并联成一次
@@ -623,14 +634,25 @@ def _scope_filter(
     - 频道公共记忆等附加作用域（``extra_read_scopes``）始终并联。
     """
     extra = [str(scope) for scope in getattr(access, "extra_read_scopes", ()) or ()]
-    main_scope = getattr(access, "scope", None)
-    if not _is_user_scope_mode(config):
-        return main_scope, _dedupe(extra)
-    if umo in _isolated_sessions(config):
-        return main_scope, _dedupe(extra)
+    raw_scope = getattr(access, "scope", None)
+    main_scope = (raw_scope.strip() or None) if isinstance(raw_scope, str) else None
+    isolated = _isolated_sessions(config)
+    if umo in isolated:
+        return (main_scope, _dedupe(extra)) if main_scope == umo else None
+    mode = str(_config_get(config, _SCOPE_MODE_KEY, "legacy")).casefold()
+    if mode != "user":
+        # 只有明确关闭 legacy 会话过滤才允许空主作用域；存在隔离会话时也不能查全库。
+        unfiltered = (
+            mode == "legacy"
+            and not isolated
+            and not _config_get(
+                config, "filtering_settings.use_session_filtering", True
+            )
+        )
+        return (main_scope, _dedupe(extra)) if main_scope or unfiltered else None
     scopes = _resolve_user_scopes(config, umo, platform_name, pairs)
     if not scopes:
-        return None, _dedupe(extra)
+        return None
     merged = _dedupe([*scopes, *extra])
     if len(merged) == 1:
         return merged[0], []
@@ -679,13 +701,18 @@ def _compact_query(query: Any) -> str:
 
 
 def _to_item(result: Any) -> MemoryItem | None:
-    """LivingMemory 的 ``HybridResult`` → :class:`MemoryItem`；空正文丢弃。"""
+    """转成内部结果；过滤空正文和未披露的私密记忆。"""
     content = str(getattr(result, "content", "") or "").strip()
     if not content:
         return None
     metadata = getattr(result, "metadata", None)
     if not isinstance(metadata, dict):
         metadata = {}
+    if str(metadata.get("visibility") or "").strip().casefold() == "private":
+        # 自主发言无法确认听众是否知情；只接受明确标记已披露的私密条目。
+        disclosed = str(metadata.get("disclosed") or "").strip().casefold()
+        if disclosed not in {"true", "1", "yes", "on"}:
+            return None
     importance = _as_float(metadata.get("importance"))
     return MemoryItem(
         memory_id=_as_int(getattr(result, "doc_id", None)),

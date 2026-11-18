@@ -140,6 +140,41 @@ async def test_all_decision_paths_follow_saved_debug_switch(tmp_path, kind):
 
 
 @pytest.mark.asyncio
+async def test_decision_debug_records_memory_recall(tmp_path):
+    """召回信息只进 meta：state 里只有裁好的条目，事后分不清没命中还是被裁掉。"""
+    store = RuleStore(tmp_path)
+    store.settings.decision_debug_enabled = True
+    context = SimpleNamespace(
+        decision=SimpleNamespace(
+            ask=AsyncMock(return_value={"q": SimpleNamespace(probability=0.8)})
+        )
+    )
+    router = DecisionRouter(context, store)
+    memory_recall = {
+        "query": "周五 上海",
+        "count": 1,
+        "items": [{"memory_id": 7, "score": 0.83, "content": "用户周五去上海出差"}],
+    }
+
+    try:
+        await router.probabilities(
+            None,
+            {"q": NoulPrompt("要接话吗？")},
+            {"private": "chat"},
+            debug_meta={"memory_recall": memory_recall},
+        )
+    finally:
+        await router.close()
+
+    record = json.loads(
+        next((tmp_path / "decision_debug").glob("*.json")).read_text(encoding="utf-8")
+    )
+    assert record["meta"]["memory_recall"] == memory_recall
+    assert record["meta"]["provider_id"] == "(核心默认)"
+    assert "memory_recall" not in record["request"]["state"]
+
+
+@pytest.mark.asyncio
 async def test_disable_debug_during_request_prevents_late_write(tmp_path):
     store = RuleStore(tmp_path)
     store.settings.decision_debug_enabled = True

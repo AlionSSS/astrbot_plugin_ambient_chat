@@ -1,9 +1,10 @@
 """把召回结果渲染成可注入提示的文本块。
 
-形状对齐投递侧已有的 ``<system_reminder>``：用一对定界标签包住，并先说明「这不是
-用户刚说的话」，避免模型把记忆条目当成对方新发来的消息（``docs/adr/0019`` 的同一
-考虑）。正文来自历史对话（用户内容），因此要压成单行并中和定界标记，别让一条记忆
-提前闭合整个块。
+形状与投递侧已有的 ``<recent_conversation>`` 一致：**说明句在标签外**，标签内只放
+数据（``<system_reminder>`` 也是这个形状）。说明句先讲「这不是用户刚说的话」，避免
+模型把记忆条目当成对方新发来的消息（``docs/adr/0019`` 的同一考虑）；放进标签里会
+和真实条目混成一类内容。正文来自历史对话（用户内容），因此要压成单行并中和定界
+标记，别让一条记忆提前闭合整个块。
 
 条目的取舍与截断交给 :mod:`.fit`，与判定侧共用同一套规则。
 """
@@ -54,10 +55,11 @@ def render_memory_block(
         max_chars: 条目部分（不含定界与说明）的字符预算；按余量装填，超出即
             截断本条收尾。
         tz: 写入时间使用的时区；缺省用本地时区。
-        note: 块首的说明句，调用方可按提示风格替换。
+        note: 标签外的说明句（与 ``<recent_conversation>`` 的说明位置一致）；
+            传空串时只返回数据块。
 
     Returns:
-        ``<long_term_memory>`` 包裹的文本块，或空串。
+        ``说明句 + \\n + <long_term_memory>…</long_term_memory>``，或空串。
     """
     budget = max(0, int(max_chars))
     zone = tz or datetime.now().astimezone().tzinfo
@@ -71,7 +73,9 @@ def render_memory_block(
     if not selected:
         return ""
     body = "\n".join(f"{_prefix(item, zone)}{text}" for item, text in selected)
-    return "\n".join([MEMORY_BLOCK_OPEN, note, body, MEMORY_BLOCK_CLOSE])
+    block = "\n".join([MEMORY_BLOCK_OPEN, body, MEMORY_BLOCK_CLOSE])
+    # 说明句留在标签外：标签内只放可被当成数据的条目，和会话记录保持同一形状。
+    return f"{note}\n{block}" if note else block
 
 
 def _prefix(item: MemoryItem, tz: tzinfo) -> str:

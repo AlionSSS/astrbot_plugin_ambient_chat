@@ -20,6 +20,7 @@ from astrbot_plugin_ambient_chat.memory.livingmemory import (
     MemoryItem,
 )
 from astrbot_plugin_ambient_chat.memory.render import (
+    DEFAULT_NOTE,
     MEMORY_BLOCK_CLOSE,
     MEMORY_BLOCK_OPEN,
     render_memory_block,
@@ -482,13 +483,27 @@ def test_render_block_skips_duplicates_and_respects_budget() -> None:
 
     block = render_memory_block(items, max_chars=120, tz=timezone.utc)
 
-    assert block.startswith(MEMORY_BLOCK_OPEN)
+    # 说明句在标签外、标签内只有条目：与会话记录块保持同一形状。
+    assert block.startswith(DEFAULT_NOTE + "\n" + MEMORY_BLOCK_OPEN)
     assert block.count("甲") == 10
     assert "乙" in block and "乙" * 200 not in block
     # 余量还够装一条短记忆：贪心装填不浪费额度，低分条目不因分数低被丢。
     assert "丙" in block
     body = block.split("\n")[2:-1]
     assert sum(len(line) for line in body) <= 120
+    assert not any(DEFAULT_NOTE in line for line in body)
+
+
+def test_render_block_without_note_is_bare_block() -> None:
+    """调用方不要说明句时只给数据块，不留下空行。"""
+    block = render_memory_block(
+        [MemoryItem(memory_id=1, content="甲", score=0.9)],
+        tz=timezone.utc,
+        note="",
+    )
+
+    assert block.startswith(MEMORY_BLOCK_OPEN)
+    assert block.endswith(MEMORY_BLOCK_CLOSE)
 
 
 def test_render_block_drops_entry_when_remaining_below_tail() -> None:
@@ -523,3 +538,96 @@ def test_render_block_neutralizes_markers_and_unknown_time() -> None:
 
 def test_render_block_empty_items_returns_empty_string() -> None:
     assert render_memory_block([], tz=timezone.utc) == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_resolver", [False, True])
+async def test_failed_user_scope_does_not_search_unfiltered(
+    monkeypatch: pytest.MonkeyPatch, missing_resolver: bool
+) -> None:
+    engine = _Engine([_result()])
+    config = _Config({"filtering_settings.memory_scope_mode": "user"})
+    module = _patch_scope_module(monkeypatch, extra=())
+
+    def broken_resolver(config: Any, event: Any) -> str:
+        raise TypeError("incompatible resolver")
+
+    monkeypatch.setattr(
+        module,
+        "resolve_user_memory_scope",
+        None if missing_resolver else broken_resolver,
+    )
+    recall = LivingMemoryRecall(_Context(_plugin(engine, config)))
+
+    assert await recall.recall("出差", umo=UMO, sender_id="42") == []
+    assert engine.calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_session_scope_does_not_search_unfiltered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine([_result()])
+    config = _Config({"filtering_settings.memory_scope_mode": "session"})
+    _patch_scope_module(monkeypatch, scope=" ", extra=())
+
+    assert not await LivingMemoryRecall(_Context(_plugin(engine, config))).recall(
+        "出差", umo=UMO
+    )
+    assert engine.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explicitly_unfiltered_legacy_scope_still_recalls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine([_result()])
+    config = _Config({"filtering_settings.use_session_filtering": False})
+    _patch_scope_module(monkeypatch, scope=None, extra=())
+
+    assert await LivingMemoryRecall(_Context(_plugin(engine, config))).recall(
+        "出差", umo=UMO
+    )
+    assert engine.calls[0]["session_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_private_peer_can_satisfy_whitelist_but_not_authorize_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine([_result()])
+    module = _patch_scope_module(monkeypatch, extra=())
+
+    async def resolve_access(config: Any, context: Any, event: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            allowed=(event.get_sender_id(), event.get_sender_name()) == ("42", "阿离"),
+            scope=event.unified_msg_origin,
+        )
+
+    monkeypatch.setattr(module, "resolve_event_memory_access", resolve_access)
+    recall = LivingMemoryRecall(_Context(_plugin(engine, _Config())))
+    friend = "aiocqhttp:FriendMessage:42"
+    senders = [("42", "阿离")]
+
+    assert await recall.recall("出差", umo=friend, senders=senders)
+    assert not await recall.recall("出差", umo=UMO, senders=senders)
+    assert [call["session_id"] for call in engine.calls] == [friend]
+
+
+@pytest.mark.asyncio
+async def test_recall_drops_undisclosed_private_results_before_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _Engine(
+        [
+            _result(doc_id=1, metadata={"visibility": "private", "disclosed": False}),
+            _result(doc_id=2, metadata={"visibility": "private", "disclosed": "off"}),
+            _result(doc_id=3, metadata={"visibility": "private"}),
+            _result(doc_id=4, metadata={"visibility": "private", "disclosed": True}),
+            _result(doc_id=5, metadata={}),
+        ]
+    )
+    _patch_scope_module(monkeypatch)
+    recall = LivingMemoryRecall(_Context(_plugin(engine, _Config())))
+
+    assert [item.memory_id for item in await recall.recall("出差", umo=UMO)] == [4, 5]

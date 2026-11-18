@@ -24,7 +24,7 @@ from astrbot.api import logger
 
 from ..common import parse_target
 from . import history
-from .media_store import MediaStore
+from .media_store import CapturedMedia, MediaStore
 from .messages import ChatMessage
 
 if TYPE_CHECKING:
@@ -37,6 +37,12 @@ MAX_MEDIA_BYTES_PER_SESSION = 64 * 1024 * 1024
 
 PREHEAT_CONCURRENCY = 4
 """预热时并发读取的会话数：绑定可能有多个目标会话，少量并发避免拖慢启动请求。"""
+
+MEDIA_PLANS = {
+    "image": ("images", "image_slots", "图片"),
+    "audio": ("audio", "audio_slots", "语音"),
+}
+"""媒体类型 → 路径字段、组件位置字段和编号前缀。"""
 
 
 @dataclass
@@ -258,7 +264,7 @@ class ContextBuffer:
     async def _capture_media(
         self, umo: str, message: ChatMessage, components: Sequence[Any]
     ) -> None:
-        captured: list[tuple[str, int]] = []
+        captured: list[CapturedMedia] = []
         task = asyncio.current_task()
         try:
             captured = await self._media.capture(umo, components)
@@ -268,21 +274,22 @@ class ContextBuffer:
                 or not self._contains(umo, message)
             ):
                 return
-            message.images = tuple(path for path, _ in captured)
-            message.image_bytes = sum(size for _, size in captured)
+            message.images = tuple(item.path for item in captured)
+            message.image_slots = tuple(item.slot for item in captured)
+            message.image_bytes = sum(item.size for item in captured)
             captured = []  # 所有权已经交给消息，淘汰和配额负责释放。
             self._trim_media(self._buffers[umo])
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 图片缓存失败（%s）：%s", umo, exc)
         finally:
-            self._media.discard(path for path, _ in captured)
+            self._media.discard(item.path for item in captured)
             if self._captures.get(id(message)) is task:
                 self._captures.pop(id(message))
 
     async def _capture_audio(
         self, umo: str, message: ChatMessage, components: Sequence[Any]
     ) -> None:
-        captured: list[tuple[str, int]] = []
+        captured: list[CapturedMedia] = []
         task = asyncio.current_task()
         try:
             captured = await self._media.capture_audio(umo, components)
@@ -292,14 +299,15 @@ class ContextBuffer:
                 or not self._contains(umo, message)
             ):
                 return
-            message.audio = tuple(path for path, _ in captured)
-            message.audio_bytes = sum(size for _, size in captured)
+            message.audio = tuple(item.path for item in captured)
+            message.audio_slots = tuple(item.slot for item in captured)
+            message.audio_bytes = sum(item.size for item in captured)
             captured = []  # 所有权已经交给消息，淘汰和配额负责释放。
             self._trim_media(self._buffers[umo])
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 语音缓存失败（%s）：%s", umo, exc)
         finally:
-            self._media.discard(path for path, _ in captured)
+            self._media.discard(item.path for item in captured)
             if self._audio_captures.get(id(message)) is task:
                 self._audio_captures.pop(id(message))
 
@@ -340,15 +348,68 @@ class ContextBuffer:
             if not self._pins:
                 self._pins_idle.set()
 
+    @staticmethod
+    def _media_plan(
+        messages: Sequence[ChatMessage],
+        kind: str,
+        *,
+        enabled: bool,
+        limit: int,
+    ) -> tuple[list[str], dict[int, list[str | None]]]:
+        """选出本次随请求送出的媒体，并给每条消息的媒体段分配编号标签。
+
+        选择口径是「按记录顺序取最近 ``limit`` 个」：路径列表与
+        :meth:`borrow_images` / :meth:`borrow_audio` 送出去的顺序一致。标签列表
+        与消息里同类媒体段一一对应，没被送出的段是 ``None``（渲染时保持普通
+        占位）——启动预热回来的历史只有占位、没有文件，因此永远拿不到编号。
+        """
+        path_field, slot_field, prefix = MEDIA_PLANS[kind]
+        if not enabled or limit <= 0:
+            return [], {}
+        entries: list[tuple[int, int, str]] = []
+        labels: dict[int, list[str | None]] = {}
+        for message in messages:
+            paths = getattr(message, path_field)
+            if not paths:
+                continue
+            slots = getattr(message, slot_field) or range(len(paths))
+            key = id(message)
+            labels[key] = [None] * (max(slots) + 1)
+            entries.extend(
+                (key, slot, path) for slot, path in zip(slots, paths, strict=True)
+            )
+        selected = entries[-limit:]
+        for number, (key, slot, _) in enumerate(selected, 1):
+            labels[key][slot] = f"{prefix} {number}"
+        return [path for _, _, path in selected], labels
+
+    def media_labels(
+        self,
+        messages: Sequence[ChatMessage],
+        *,
+        image_limit: int,
+        audio_limit: int,
+    ) -> dict[int, dict[str, list[str | None]]]:
+        """本次请求附带的媒体编号：消息 id → 类型 → 按段顺序的标签。
+
+        与借用共用同一套选择口径，调用方要在进入借用上下文**之前同步调用**
+        （中间不 await），这样编号和实际送出的附件不会错位。
+        """
+        labels: dict[int, dict[str, list[str | None]]] = {}
+        for kind, limit in (("image", image_limit), ("audio", audio_limit)):
+            enabled = self._media_enabled if kind == "image" else self._audio_enabled
+            _, marks = self._media_plan(messages, kind, enabled=enabled, limit=limit)
+            for key, series in marks.items():
+                labels.setdefault(key, {})[kind] = series
+        return labels
+
     @contextmanager
     def borrow_images(
         self, messages: Sequence[ChatMessage], *, limit: int
     ) -> Iterator[list[str]]:
         """快照最近图片并借用至请求退出；淘汰不删除借用中的文件。"""
-        paths = (
-            [path for message in messages for path in message.images][-limit:]
-            if self._media_enabled and limit > 0
-            else []
+        paths, _ = self._media_plan(
+            messages, "image", enabled=self._media_enabled, limit=limit
         )
         with self._borrow(paths) as borrowed:
             yield borrowed
@@ -358,10 +419,8 @@ class ContextBuffer:
         self, messages: Sequence[ChatMessage], *, limit: int
     ) -> Iterator[list[str]]:
         """快照最近语音并借用至请求退出；条数由调用方按模型能力决定。"""
-        paths = (
-            [path for message in messages for path in message.audio][-limit:]
-            if self._audio_enabled and limit > 0
-            else []
+        paths, _ = self._media_plan(
+            messages, "audio", enabled=self._audio_enabled, limit=limit
         )
         with self._borrow(paths) as borrowed:
             yield borrowed
@@ -381,9 +440,11 @@ class ContextBuffer:
         self._cancel_audio_capture(message)
         self._release_media(message.images)
         message.images = ()
+        message.image_slots = ()
         message.image_bytes = 0
         self._release_media(message.audio)
         message.audio = ()
+        message.audio_slots = ()
         message.audio_bytes = 0
 
     def _trim_media(self, buffer: deque[ChatMessage]) -> None:
@@ -401,6 +462,9 @@ class ContextBuffer:
                 path = message.audio[0]
                 size = _file_size(path)
                 self._release_media([path])
+                message.audio_slots = (
+                    message.audio_slots or tuple(range(len(message.audio)))
+                )[1:]
                 message.audio = message.audio[1:]
                 message.audio_bytes = max(0, message.audio_bytes - size)
                 total -= size
@@ -411,6 +475,9 @@ class ContextBuffer:
                 path = message.images[0]
                 size = _file_size(path)
                 self._release_media([path])
+                message.image_slots = (
+                    message.image_slots or tuple(range(len(message.images)))
+                )[1:]
                 message.images = message.images[1:]
                 message.image_bytes = max(0, message.image_bytes - size)
                 total -= size
@@ -536,6 +603,7 @@ class ContextBuffer:
                 self._cancel_capture(message)
                 self._release_media(message.images)
                 message.images = ()
+                message.image_slots = ()
                 message.image_bytes = 0
 
     def _clear_audio(self) -> None:
@@ -544,6 +612,7 @@ class ContextBuffer:
                 self._cancel_audio_capture(message)
                 self._release_media(message.audio)
                 message.audio = ()
+                message.audio_slots = ()
                 message.audio_bytes = 0
 
     def reset_media(self) -> None:
@@ -573,11 +642,19 @@ class ContextBuffer:
         tz: _tzinfo,
         *,
         with_id: bool = False,
+        media_labels: Mapping[int, Mapping[str, Sequence[str | None]]] | None = None,
     ) -> str:
-        """渲染最近消息；群聊传 ``with_id=True`` 以带完整发送者 ID。"""
-        lines = [message.render(tz, with_id=with_id) for message in messages][
-            -MAX_RENDER_LINES:
-        ]
+        """渲染最近消息；群聊传 ``with_id=True`` 以带完整发送者 ID。
+
+        ``media_labels`` 是 :meth:`media_labels` 的结果：只给本次真正随请求送出
+        的媒体占位加编号，其余占位保持原样，避免模型把附件对应到预热历史里
+        没有附件的那几个 ``[图片]``。
+        """
+        labels = media_labels or {}
+        lines = [
+            message.render(tz, with_id=with_id, media_labels=labels.get(id(message)))
+            for message in messages
+        ][-MAX_RENDER_LINES:]
         return "\n".join(lines)
 
     @staticmethod

@@ -126,7 +126,7 @@ function renderWindowField(model, index) {
       ${options}
       <option value="custom"${preset ? '' : ' selected'}>自定义…</option>
     </select>
-    <input type="number" min="2048" max="200000" step="1024"
+    <input type="number" min="8192" max="200000" step="1"
       data-dm-index="${index}" data-dm-field="context_tokens"
       value="${escapeHtml(value)}" class="${preset ? 'hidden' : ''}" /></span>`;
 }
@@ -178,7 +178,7 @@ function renderDecisionModels() {
             </button>
           </span>
         </div>
-        <label class="field"><span>上下文窗口预算<em>2048~200000</em></span>
+        <label class="field"><span>上下文窗口预算<em>8192~200000</em></span>
           ${renderWindowField(model, index)}</label>
       </div>
       <div class="decision-test-result" data-dm-result="${index}"></div>

@@ -22,9 +22,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any
+
+from astrbot.core.provider.entities import ProviderType
 
 from ..conversation.messages import strip_placeholders
 from ..memory import MemoryItem, senders_for_recall
@@ -53,12 +56,65 @@ QUERY_MESSAGE_COUNT = 3
 
 QUERY_MAX_CHARS = 120
 
+
+@dataclass(frozen=True, slots=True)
+class MemoryRecall:
+    """一次召回的完整快照：查询词 + 命中条目。
+
+    判定与生成共用同一份（ADR-0013），调试日志也读这一份：只看得到注入后的
+    记忆文本，分不清「没查到」与「查到了但按预算没装下」。条目顺序保持召回
+    返回的原始顺序，不经 ``memory.fit`` 的重排，调试日志才看得见检索本身。
+
+    实现 ``__len__`` / ``__iter__`` / ``__getitem__`` 是为了让「记忆序列」的
+    旧调用点（判定侧装入 state、生成侧渲染提示块）不必改动。
+    """
+
+    query: str = ""
+    """实际发给 LivingMemory 的检索词；空串表示本次没有发起召回。"""
+
+    items: tuple[MemoryItem, ...] = ()
+    """召回结果；空元组表示查过但没命中，或压根没查。"""
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __bool__(self) -> bool:
+        return bool(self.items)
+
+    def __iter__(self) -> Iterator[MemoryItem]:
+        return iter(self.items)
+
+    def __getitem__(self, index: int) -> MemoryItem:
+        return self.items[index]
+
+    def debug_payload(self, tz: tzinfo | None = None) -> dict[str, Any]:
+        """调试日志的形状：查询词 + 每条命中的 ID / 分数 / 正文 / 记录时间。
+
+        时间来自 LivingMemory 记忆元数据里的 ``create_time``（写入时刻，epoch 秒）。
+        ``created_at`` 保留原始值，``created_at_text`` 按 ``tz`` 渲染成可读文本；
+        缺失或非法时为 ``None``，不编造时间。``tz`` 缺省用本地时区。
+        """
+        zone = tz or datetime.now().astimezone().tzinfo
+        return {
+            "query": self.query,
+            "count": len(self.items),
+            "items": [
+                {
+                    "memory_id": item.memory_id,
+                    "score": round(float(item.score or 0.0), 4),
+                    "importance": item.importance,
+                    "created_at": item.created_at,
+                    "created_at_text": _format_created_at(item.created_at, zone),
+                    "content": item.content,
+                }
+                for item in self.items
+            ],
+        }
+
+
 # ---------------------------------------------------------------- 判定侧预算
 DECISION_STATE_RATIO = 0.85
 """上下文窗口里留给判定 state 的比例：剩下的给 questions 与输出。"""
-
-DECISION_STATE_MIN_CHARS = 3_000
-"""再小的窗口也要留出人格与最近对话：低于这个值判定会退化成「只看一句话」。"""
 
 DECISION_STATE_HARD_MAX_CHARS = 48_000
 """state 上限：判定模型每次都要读完整份，再大只是拖慢判定与烧钱。"""
@@ -78,7 +134,7 @@ DECISION_ENTRY_SHARE = ENTRY_SHARE
 DEFAULT_DECISION_STATE_CHARS = int(
     DEFAULT_DECISION_CONTEXT_TOKENS * DECISION_STATE_RATIO
 )
-"""默认窗口（8K）推导出的 state 预算，约 6963 字。"""
+"""默认窗口（16K）推导出的 state 预算。"""
 
 DECISION_STATE_CHAR_BUDGET = DEFAULT_DECISION_STATE_CHARS
 """``_fit_conversation`` 的默认预算；实际值由 :func:`decision_budget` 按窗口给出。"""
@@ -90,7 +146,7 @@ DECISION_MEMORY_CHARS = max(
         DECISION_MEMORY_MAX_CHARS,
     ),
 )
-"""默认窗口下的记忆总预算，约 417 字。"""
+"""默认窗口下的记忆总预算。"""
 
 # ---------------------------------------------------------------- 生成侧预算
 DELIVERY_MEMORY_CHARS = 600
@@ -124,10 +180,9 @@ def decision_budget(tokens: int | None = None) -> DecisionBudget:
         ``state`` / 记忆总量 / 单条上限三档预算；窗口越大，三档同步变大。
     """
     context_tokens = _positive_int(tokens, DEFAULT_DECISION_CONTEXT_TOKENS)
-    state = _clamp(
-        int(context_tokens * DECISION_STATE_RATIO),
-        DECISION_STATE_MIN_CHARS,
-        DECISION_STATE_HARD_MAX_CHARS,
+    # 自定义窗口最小 8K；若核心声明了更小的实际窗口，不向上取整。
+    state = min(
+        int(context_tokens * DECISION_STATE_RATIO), DECISION_STATE_HARD_MAX_CHARS
     )
     memory = _clamp(
         int(state * DECISION_MEMORY_RATIO),
@@ -147,7 +202,7 @@ def decision_window(context: Any, settings: Settings, ref: str) -> int:
     - ``custom:<id>``：读「更多设置」里该模型自己填的 ``context_tokens``；
     - 官方判断提供商：读 AstrBot 供应商配置里的 ``max_context_tokens``，与对话侧
       同一个字段；
-    - 引用为空（走核心默认判断提供商）时取第一个判断提供商的声明值；
+    - 引用为空时读取核心当前选择的默认判断提供商；
     - 都读不到时用 :data:`DEFAULT_DECISION_CONTEXT_TOKENS`，判定照常进行。
     """
     cleaned = (ref or "").strip()
@@ -168,15 +223,16 @@ def decision_window(context: Any, settings: Settings, ref: str) -> int:
 def _official_decision_window(context: Any, provider_id: str) -> int:
     """官方判断提供商声明的窗口；未声明或读不到时返回 0。"""
     manager = getattr(context, "provider_manager", None)
-    for provider in getattr(manager, "decision_provider_insts", None) or ():
+    try:
         if provider_id:
-            meta = getattr(provider, "meta", None)
-            meta = meta() if callable(meta) else None
-            if str(getattr(meta, "id", "")) != provider_id:
-                continue
+            provider = context.get_provider_by_id(provider_id)
+        else:
+            # 与核心 DecisionService 使用同一套默认选择（无 umo 时同步和异步入口等价）。
+            provider = manager.get_using_provider(ProviderType.DECISION)
         config = getattr(provider, "provider_config", None) or {}
         return _int_or_zero(config.get("max_context_tokens"))
-    return 0
+    except Exception:  # noqa: BLE001 - 读不到窗口不影响判定
+        return 0
 
 
 def delivery_memory_chars(context: Any, provider_id: str) -> int:
@@ -269,8 +325,8 @@ async def recall_memories(
     messages: Sequence[ChatMessage],
     *,
     timeout: float = RECALL_TIMEOUT_SECONDS,
-) -> list[MemoryItem]:
-    """按「更多设置」的开关与参数召回一次；任何不可用都返回空列表。
+) -> MemoryRecall:
+    """按「更多设置」的开关与参数召回一次；任何不可用都返回空快照。
 
     Args:
         recall: 召回客户端；``None`` 表示插件没构造（旧调用方或测试）。
@@ -280,20 +336,22 @@ async def recall_memories(
         timeout: 覆盖召回超时。
 
     Returns:
-        召回结果；关闭、无关键词、未安装或失败时为空列表。
+        查询词与召回结果；关闭、无关键词、未安装或失败时 ``items`` 为空。
+        查询词原样保留（空串表示没有发起召回），调试日志靠它还原当时的检索。
     """
     if recall is None or not settings.memory_recall_enabled:
-        return []
+        return MemoryRecall()
     query = recall_query(messages)
     if not query:
-        return []
-    return await recall.recall(
+        return MemoryRecall()
+    items = await recall.recall(
         query,
         umo=umo,
         senders=senders_for_recall(umo, messages, limit=settings.memory_recall_fanout),
         k=settings.memory_recall_k,
         timeout=timeout,
     )
+    return MemoryRecall(query=query, items=tuple(items))
 
 
 def memory_entries(
@@ -317,6 +375,25 @@ def memory_entries(
         min_tail=min_tail,
     )
     return [text for _item, text in fitted]
+
+
+def _format_created_at(value: float | None, tz: tzinfo) -> str | None:
+    """epoch 秒 → ``YYYY-MM-DD HH:MM``；未知时间返回 ``None``，不写 1970 年。
+
+    与提示块里的时间戳（``memory.render``）同一口径，日志与提示对得上。
+    """
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    try:
+        return f"{datetime.fromtimestamp(seconds, tz):%Y-%m-%d %H:%M}"
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -345,6 +422,7 @@ __all__ = [
     "DECISION_STATE_CHAR_BUDGET",
     "DELIVERY_MEMORY_CHARS",
     "DecisionBudget",
+    "MemoryRecall",
     "QUERY_MAX_CHARS",
     "QUERY_MESSAGE_COUNT",
     "RECALL_TIMEOUT_SECONDS",

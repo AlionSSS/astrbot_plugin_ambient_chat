@@ -238,10 +238,20 @@ class ChatMessage:
     会误判成「戳的是自己」；``is_self`` 才是可靠依据。
     """
 
-    def render(self, tz: _tzinfo, *, with_id: bool = False) -> str:
+    image_slots: tuple[int, ...] = ()
+    audio_slots: tuple[int, ...] = ()
+    """与路径逐项对应的同类组件位置，从 0 开始；未指定时按路径顺序对应。"""
+
+    def render(
+        self,
+        tz: _tzinfo,
+        *,
+        with_id: bool = False,
+        media_labels: Mapping[str, Sequence[str | None]] | None = None,
+    ) -> str:
         return (
             f"{self.display_name(with_id)} ({format_stamp(self.timestamp, tz)}): "
-            f"{self.render_text()}"
+            f"{self.render_text(media_labels)}"
         )
 
     def body_text(self) -> str:
@@ -273,19 +283,53 @@ class ChatMessage:
             segments.append(segment)
         return tuple(segments)
 
-    def render_text(self) -> str:
-        """对话模型看到的正文：@/引用标记 + 按真实顺序排列的文字与占位。"""
+    def render_text(
+        self, media_labels: Mapping[str, Sequence[str | None]] | None = None
+    ) -> str:
+        """对话模型看到的正文：@/引用标记 + 按真实顺序排列的文字与占位。
+
+        ``media_labels`` 是本条消息各类媒体段的标签（如 ``图片 1``），只有随本次
+        请求真正附带的媒体才有标签：带编号的占位对应送出去的附件，其余仍是
+        ``[图片]`` / ``[语音]`` 这样的普通占位（例如启动预热回来的历史）。
+        """
         chunks = [self._addressing_text()]
+        used: dict[str, int] = {}
         for segment in self.ordered_parts():
-            if segment.get("type") == TEXT_SEGMENT:
+            kind = str(segment.get("type") or "")
+            if kind == TEXT_SEGMENT:
                 chunks.append(self.body_text())
-            else:
-                chunks.append(self._segment_text(segment))
+                continue
+            chunks.append(
+                self._segment_text(
+                    segment, label=self._media_label(kind, media_labels, used)
+                )
+            )
         return " ".join(chunk for chunk in chunks if chunk)
 
-    def _segment_text(self, segment: Mapping[str, Any]) -> str:
+    @staticmethod
+    def _media_label(
+        kind: str,
+        labels: Mapping[str, Sequence[str | None]] | None,
+        used: dict[str, int],
+    ) -> str | None:
+        """取这条消息里下一个同类媒体段的标签；标签按段顺序一一对应。"""
+        if not labels:
+            return None
+        series = labels.get(kind)
+        if series is None:
+            return None
+        index = used.get(kind, 0)
+        used[kind] = index + 1
+        return series[index] if index < len(series) else None
+
+    def _segment_text(
+        self, segment: Mapping[str, Any], *, label: str | None = None
+    ) -> str:
         """一个非文字单元的占位：戳一戳带目标，文件带文件名，其余用中文短词。"""
         kind = str(segment.get("type") or "")
+        if label:
+            # 这次真的附带了这个媒体：编号是模型对应附件的唯一依据。
+            return f"[{label}]"
         if kind == "poke":
             return self._poke_text()
         if kind == "file":

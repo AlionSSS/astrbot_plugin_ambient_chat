@@ -35,7 +35,7 @@ from ..conversation.messages import SELF_NAME, ChatMessage, to_datetime
 from ..memory import render_memory_block
 from ..rules.models import Settings
 from .debug_log import to_jsonable, write_debug_record
-from .memory import delivery_memory_chars, recall_memories
+from .memory import MemoryRecall, delivery_memory_chars, recall_memories
 from .segments import is_blocked_platform, split
 
 if TYPE_CHECKING:
@@ -112,12 +112,14 @@ class Delivery:
         persona_prompt: str = "",
         now: datetime | None = None,
         *,
-        memories: Sequence[MemoryItem] | None = None,
+        memories: MemoryRecall | Sequence[MemoryItem] | None = None,
     ) -> PreparedSpeech | None:
         """组装并生成一次发言。
 
         ``memories`` 是执行层已经召回好的记忆（判定阶段取过，这里复用）；``None``
         表示调用方没有召回，本方法会自己取一次，供旧调用点与直接调用使用。
+        传 :class:`~.memory.MemoryRecall` 时，查询词与完整召回结果会写进对话模型
+        调试日志。
         """
         target = parse_target(umo)
         if target is None:
@@ -143,30 +145,35 @@ class Delivery:
             self._timezone = resolve_timezone(str(configured or ""))
         return self._timezone
 
-    async def _memory_block(
+    async def _memory_recall(
         self,
         umo: str,
         messages: list[ChatMessage],
-        memories: Sequence[MemoryItem] | None,
-        provider_id: str,
-    ) -> str:
-        """渲染长期记忆块；执行层已召回时直接复用，避免重复检索。
+        memories: MemoryRecall | Sequence[MemoryItem] | None,
+    ) -> MemoryRecall | None:
+        """本次的记忆召回快照；未启用长期记忆时返回 ``None``。
 
-        ``memories`` 为 ``None`` 才自己召回（旧调用点、直接调用），为空列表表示
-        「召回过但没有命中」，不再打第二次请求。字符预算跟着对话模型的窗口走：
-        换成大模型时自动放宽，读不到窗口才回退默认值。
+        ``memories`` 不为 ``None`` 表示执行层已经取过（判定阶段召回），直接复用，
+        绝不重复检索；空快照表示「取过但没命中」，也不再打第二次请求。只有 ``None``
+        （旧调用点、直接调用）才自己召回一次。
         """
         if self._recall is None:
-            return ""
-        items = (
-            memories
-            if memories is not None
-            else await recall_memories(self._recall, self._settings(), umo, messages)
-        )
-        if not items:
+            return None
+        if memories is None:
+            return await recall_memories(self._recall, self._settings(), umo, messages)
+        if isinstance(memories, MemoryRecall):
+            return memories
+        return MemoryRecall(items=tuple(memories))
+
+    def _memory_block(self, recall: MemoryRecall | None, provider_id: str) -> str:
+        """渲染长期记忆块；没有可用条目时返回空串。
+
+        字符预算跟着对话模型的窗口走：换成大模型时自动放宽，读不到窗口才回退默认值。
+        """
+        if recall is None or not recall:
             return ""
         return render_memory_block(
-            items,
+            recall.items,
             max_chars=delivery_memory_chars(self._context, provider_id),
             tz=self._tz(),
         )
@@ -205,11 +212,13 @@ class Delivery:
         *,
         umo: str = "",
         stage: str = "initial",
+        debug_meta: Mapping[str, Any] | None = None,
     ) -> Any:
         """单独请求一次对话模型；失败返回 None，由调用方决定是否重试。
 
         只走 ``provider.text_chat``，不传会话对象、不产生会话历史写入。
-        ``umo`` / ``stage`` 仅用于调试日志的定位信息。
+        ``umo`` / ``stage`` 仅用于调试日志的定位信息；``debug_meta`` 是只写调试
+        日志、不进请求体的附加字段（例如本次召回记忆的查询词与结果）。
         """
         logger.info("[Ambient] 对话模型请求（%s）", provider_id)
         started = time.perf_counter()
@@ -220,13 +229,15 @@ class Delivery:
             "image_urls": list(image_urls),
             "audio_urls": list(audio_urls or ()),
         }
-        meta = {
+        meta: dict[str, Any] = {
             "provider_id": provider_id,
             "umo": umo,
             "stage": stage,
             "image_count": len(image_urls),
             "audio_count": len(audio_urls or ()),
         }
+        if debug_meta:
+            meta.update(debug_meta)
         try:
             response = await self._context.llm_generate(
                 chat_provider_id=provider_id,
@@ -293,7 +304,7 @@ class Delivery:
         hint: str,
         persona_prompt: str,
         now: datetime,
-        memories: Sequence[MemoryItem] | None = None,
+        memories: MemoryRecall | Sequence[MemoryItem] | None = None,
     ) -> PreparedSpeech | None:
         umo = target.umo
         provider_id = rule.chat_provider_id
@@ -311,22 +322,45 @@ class Delivery:
 
         messages = self._buffer.recent(umo, rule.context_turns)
         self_name = self._self_name(umo) if self._self_name else ""
-        prompt = build_prompt(
-            hint,
-            messages,
-            now,
-            target,
-            self_name=self_name,
-            group_name=self._buffer.session_name(umo),
-            memory_block=await self._memory_block(umo, messages, memories, provider_id),
+        recall = await self._memory_recall(umo, messages, memories)
+        memory_block = self._memory_block(recall, provider_id)
+        image_limit = MAX_IMAGES if self._allows_images(provider_id) else 0
+        audio_limit = MAX_AUDIOS if self._allows_audio(provider_id) else 0
+
+        def compose_prompt(
+            labels: Mapping[int, Mapping[str, Sequence[str | None]]] | None = None,
+        ) -> str:
+            """按该次请求的附件编号渲染提示词，不重新读取缓冲的媒体状态。"""
+            return build_prompt(
+                hint,
+                messages,
+                now,
+                target,
+                self_name=self_name,
+                group_name=self._buffer.session_name(umo),
+                memory_block=memory_block,
+                media_labels=labels,
+            )
+
+        # 编号要在借用之前同步算好（中间不 await），否则转存完成的图片会让
+        # 记录里的编号落后于真正送出的附件。
+        labels = self._buffer.media_labels(
+            messages, image_limit=image_limit, audio_limit=audio_limit
+        )
+        prompt = compose_prompt(labels)
+        # 召回只发生一次：判定与生成共用同一份，调试日志也记这一份。
+        debug_meta = (
+            {"memory_recall": recall.debug_payload(self._tz())}
+            if recall is not None
+            else None
         )
         with self._buffer.borrow_images(
             messages,
-            limit=MAX_IMAGES if self._allows_images(provider_id) else 0,
+            limit=image_limit,
         ) as image_urls:
             with self._buffer.borrow_audio(
                 messages,
-                limit=MAX_AUDIOS if self._allows_audio(provider_id) else 0,
+                limit=audio_limit,
             ) as audio_urls:
                 response = await self._generate(
                     provider_id,
@@ -336,14 +370,23 @@ class Delivery:
                     audio_urls,
                     umo=umo,
                     stage="initial",
+                    debug_meta=debug_meta,
                 )
             if response is None and audio_urls:
                 # 逐级退让：先只丢语音（音频支持最不稳定），图片往往还能用。
-                # 语音借用已退出，这次不再持有音频文件。
+                # 语音借用已退出，这次不再持有音频文件；提示词也去掉语音编号。
                 logger.warning(
                     "[Ambient] 带语音生成失败，去掉语音重试（%s，%d 张图）",
                     umo,
                     len(image_urls),
+                )
+                # 沿用借用时的图片编号：在途转存或淘汰不会改变此请求的图片列表。
+                prompt = compose_prompt(
+                    {
+                        key: {"image": marks["image"]}
+                        for key, marks in labels.items()
+                        if "image" in marks
+                    }
                 )
                 response = await self._generate(
                     provider_id,
@@ -353,6 +396,7 @@ class Delivery:
                     [],
                     umo=umo,
                     stage="without-audio",
+                    debug_meta=debug_meta,
                 )
         if response is None and image_urls:
             # 网络、额度等临时错误不能作为模型不支持媒体的证据，只影响本次。
@@ -361,6 +405,7 @@ class Delivery:
                 umo,
                 len(image_urls),
             )
+            prompt = compose_prompt()
             response = await self._generate(
                 provider_id,
                 prompt,
@@ -369,6 +414,7 @@ class Delivery:
                 [],
                 umo=umo,
                 stage="text-only",
+                debug_meta=debug_meta,
             )
         if response is None:
             return None
@@ -562,6 +608,7 @@ def build_prompt(
     self_name: str = "",
     group_name: str = "",
     memory_block: str = "",
+    media_labels: Mapping[int, Mapping[str, Sequence[str | None]]] | None = None,
 ) -> str:
     """拼用户消息：最近会话记录 → 长期记忆 → 时间与会话信息 → 发言提示。
 
@@ -571,15 +618,22 @@ def build_prompt(
     ``state.self`` 一致，避免模型把账号昵称当成别的群友。``group_name`` 是
     群聊的可读名称（私聊忽略），让模型知道这是个什么群。
 
-    ``memory_block`` 是长期记忆（``<long_term_memory>`` 包裹），放在记录之后、
-    时间提醒之前：先说「以前聊过什么」，再说「现在几点、冷场多久」，最后才是
-    这次的任务，从背景到当下逐层收拢。
+    ``media_labels`` 是本次请求实际送出媒体的编号（见
+    :meth:`ContextBuffer.media_labels`）：带编号的占位才是附件，其余占位只是
+    历史记录里的标记。不能只按「记录里 [图片] 出现的先后顺序」解释——启动
+    预热回来的历史里有一堆没有附件的 ``[图片]``，会把真正的图错位到旧消息上。
+
+    ``memory_block`` 是长期记忆（说明句 + ``<long_term_memory>`` 包裹的条目，
+    与记录块同为「说明在标签外」的形状），放在记录之后、时间提醒之前：先说
+    「以前聊过什么」，再说「现在几点、冷场多久」，最后才是这次的任务，从背景
+    到当下逐层收拢。
     """
     parts: list[str] = []
     transcript = ContextBuffer.render(
         messages,
         now.tzinfo or timezone.utc,
         with_id=target.is_group,
+        media_labels=media_labels,
     )
     if transcript:
         note = (
@@ -589,12 +643,26 @@ def build_prompt(
         name = (self_name or "").strip()
         if name:
             note += f"记录里署名「{name}」的发言都是你自己之前说的。"
-        if "[图片]" in transcript or "[语音]" in transcript:
-            # 图片与语音不在文本里，而是作为附件平铺附带：说明顺序对应关系，
-            # 否则模型只知道「有图」，不知道哪张图属于哪条消息。
+        attached = [
+            label
+            for marks in (media_labels or {}).values()
+            for series in marks.values()
+            for label in series
+            if label
+        ]
+        if attached:
+            # 图片与语音不在文本里，而是作为附件平铺附带：编号是唯一的对应依据。
             note += (
-                "若本次带有图片或语音附件，它们按记录里 [图片] / [语音] "
-                "出现的先后顺序排列。"
+                "记录里带编号的 [图片 n] / [语音 n] 是本条请求随附的附件，"
+                "图片与语音各自按编号从小到大排列；不带编号的 [图片] / [语音] "
+                "只是历史记录里的占位，本次没有附带对应内容。"
+            )
+        elif "[图片" in transcript or "[语音" in transcript:
+            # 只有占位没有附件（例如启动预热回来的历史）：明确说明看不到内容，
+            # 免得模型把历史占位当成这次带来的图。
+            note += (
+                "记录里的 [图片] / [语音] 只是历史记录里的占位，"
+                "本次请求没有附带任何图片或语音。"
             )
         parts.append(
             f"{note}\n<recent_conversation>\n{transcript}\n</recent_conversation>"

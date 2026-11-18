@@ -225,6 +225,13 @@ def _custom_meta(
     }
 
 
+def _merge_meta(
+    meta: Mapping[str, Any], debug_meta: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """在定位字段之上叠加调用方给的调试字段；同键以调用方为准。"""
+    return {**meta, **(debug_meta or {})}
+
+
 class DecisionRouter:
     """按规则的配置选择决策模型，并统一返回 ``{问题键: 概率}``。"""
 
@@ -249,6 +256,8 @@ class DecisionRouter:
         provider_id: str | None,
         prompts: Mapping[str, NoulPrompt],
         state: State | None = None,
+        *,
+        debug_meta: Mapping[str, Any] | None = None,
     ) -> dict[str, float]:
         """一次判断多个 noul 问题。
 
@@ -256,6 +265,8 @@ class DecisionRouter:
             provider_id: 规则里的决策模型引用，``None`` / 空串表示核心默认。
             prompts: 问题键 → 判断内容与判定标准。
             state: 原样发给决策模型的上下文。
+            debug_meta: 额外写进调试日志 ``meta`` 的字段（不含在请求体里），
+                例如本次召回记忆的查询词与结果。
 
         Returns:
             问题键 → 「陈述为真」的概率。
@@ -268,8 +279,8 @@ class DecisionRouter:
         ref = (provider_id or "").strip()
         if ref.startswith(CUSTOM_DECISION_PREFIX):
             model_id = ref[len(CUSTOM_DECISION_PREFIX) :]
-            return await self._ask_custom(model_id, prompts, state)
-        return await self._ask_official(ref or None, prompts, state)
+            return await self._ask_custom(model_id, prompts, state, debug_meta)
+        return await self._ask_official(ref or None, prompts, state, debug_meta)
 
     async def reload(self, model_ids: set[str] | None = None) -> None:
         """受影响判断退出后，仅释放已变更或删除的客户端。
@@ -305,6 +316,7 @@ class DecisionRouter:
         provider_id: str | None,
         prompts: Mapping[str, NoulPrompt],
         state: State | None,
+        debug_meta: Mapping[str, Any] | None = None,
     ) -> dict[str, float]:
         service = getattr(self._context, "decision", None)
         if service is None:
@@ -321,7 +333,7 @@ class DecisionRouter:
                 for head, question in questions.items()
             },
         }
-        meta = {"provider_id": provider_id or "(核心默认)"}
+        meta = _merge_meta({"provider_id": provider_id or "(核心默认)"}, debug_meta)
         started = time.perf_counter()
         try:
             answers = await service.ask(
@@ -374,6 +386,7 @@ class DecisionRouter:
         model_id: str,
         prompts: Mapping[str, NoulPrompt],
         state: State | None,
+        debug_meta: Mapping[str, Any] | None = None,
     ) -> dict[str, float]:
         model = self._store.find_decision_model(model_id)
         if model is None:
@@ -401,7 +414,7 @@ class DecisionRouter:
                 trace.response_json(),
                 store=self._store,
                 started=started,
-                meta=_custom_meta(model, client, trace),
+                meta=_merge_meta(_custom_meta(model, client, trace), debug_meta),
                 error=f"{type(exc).__name__}: {exc}",
             )
             if isinstance(exc, SystemOneContentRejected):
@@ -417,7 +430,7 @@ class DecisionRouter:
             trace.response_json(answers),
             store=self._store,
             started=started,
-            meta=_custom_meta(model, client, trace),
+            meta=_merge_meta(_custom_meta(model, client, trace), debug_meta),
         )
         if trace.usage is not None:
             logger.debug(

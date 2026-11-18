@@ -31,6 +31,8 @@ class _Router:
         provider_id: str | None,
         prompts: Any,
         state: Any = None,
+        *,
+        debug_meta: Any = None,
     ) -> dict[str, float]:
         return dict(self._scores)
 

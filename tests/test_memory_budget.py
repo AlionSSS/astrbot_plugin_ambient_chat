@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from astrbot.core.provider.entities import ProviderType
 from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
 from astrbot_plugin_ambient_chat.memory.fit import ENTRY_SHARE
 from astrbot_plugin_ambient_chat.rules.models import (
@@ -79,11 +80,9 @@ def test_budget_is_capped_at_large_windows() -> None:
     assert budget.memory_chars == 2_000
 
 
-def test_budget_has_floor_for_tiny_windows() -> None:
-    budget = decision_budget(2048)
-
-    assert budget.state_chars == 3_000
-    assert budget.memory_chars == 240
+@pytest.mark.parametrize("tokens", [2048, 8192])
+def test_budget_does_not_round_up_small_declared_windows(tokens: int) -> None:
+    assert decision_budget(tokens).state_chars == int(tokens * 0.85)
 
 
 def test_entry_cap_is_a_share_of_total_budget() -> None:
@@ -113,10 +112,16 @@ def test_bigger_window_keeps_more_conversation() -> None:
 _MODEL = {"id": "dm", "base_url": "https://example.invalid", "model": "m"}
 
 
-@pytest.mark.parametrize("tokens", [2047, 200001])
+@pytest.mark.parametrize("tokens", [2048, 8191, 200001])
 def test_decision_model_rejects_out_of_range_window(tokens: int) -> None:
     with pytest.raises(RuleError, match="上下文窗口"):
         DecisionModel.parse({**_MODEL, "context_tokens": tokens})
+
+
+def test_decision_model_accepts_8k_window() -> None:
+    assert (
+        DecisionModel.parse({**_MODEL, "context_tokens": 8192}).context_tokens == 8192
+    )
 
 
 def test_decision_model_context_tokens_roundtrip() -> None:
@@ -148,25 +153,42 @@ class _DecisionProvider:
 
 
 class _ProviderManager:
-    def __init__(self, *providers: Any) -> None:
+    def __init__(self, *providers: _DecisionProvider) -> None:
         self.decision_provider_insts = list(providers)
+        self.curr_decision_provider_inst = providers[-1]
+
+    def get_using_provider(self, provider_type: ProviderType) -> _DecisionProvider:
+        assert provider_type == ProviderType.DECISION
+        return self.curr_decision_provider_inst
 
 
 class _DecisionContext:
-    def __init__(self, *providers: Any) -> None:
+    def __init__(self, *providers: _DecisionProvider) -> None:
         self.provider_manager = _ProviderManager(*providers)
+
+    def get_provider_by_id(self, provider_id: str) -> _DecisionProvider | None:
+        return next(
+            (
+                p
+                for p in self.provider_manager.decision_provider_insts
+                if p.meta().id == provider_id
+            ),
+            None,
+        )
 
 
 def test_decision_window_reads_the_selected_model() -> None:
     settings = Settings.parse(
         {"decision_models": [{**_MODEL, "context_tokens": 32768}]}
     )
-    context = _DecisionContext(_DecisionProvider("dp", 65536))
+    context = _DecisionContext(
+        _DecisionProvider("dp", 65536), _DecisionProvider("active", 8192)
+    )
 
     assert decision_window(context, settings, "custom:dm") == 32768
     assert decision_window(context, settings, "dp") == 65536
-    # 引用为空表示走核心默认判断提供商，取第一个的声明值。
-    assert decision_window(context, settings, "") == 65536
+    # 默认提供商不一定排第一。
+    assert decision_window(context, settings, "") == 8192
     # 模型被删或提供商没声明窗口时退回默认值，判定照常进行。
     assert decision_window(None, settings, "custom:missing") == (
         DEFAULT_DECISION_CONTEXT_TOKENS

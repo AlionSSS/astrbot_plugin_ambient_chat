@@ -17,6 +17,7 @@ import shutil
 import time
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,15 @@ BMP 等格式虽然能解码，但不在任何一家多模态模型的支持列�
 """
 
 
+@dataclass(frozen=True, slots=True)
+class CapturedMedia:
+    """一份转存文件及其在原消息同类组件里的位置。"""
+
+    slot: int
+    path: str
+    size: int
+
+
 class MediaStore:
     """把消息里的图片、语音转存到插件数据目录，返回本地绝对路径与字节数。"""
 
@@ -154,17 +164,17 @@ class MediaStore:
         self,
         umo: str,
         components: Sequence[Any],
-    ) -> list[tuple[str, int]]:
-        """转存一条消息里的图片，返回 ``(路径, 字节数)``，失败的图片直接跳过。"""
-        saved: list[tuple[str, int]] = []
+    ) -> list[CapturedMedia]:
+        """转存图片，失败时跳过文件但不重排原始组件位置。"""
+        saved: list[CapturedMedia] = []
         try:
-            for component in list(components)[:MAX_IMAGES_PER_MESSAGE]:
+            for slot, component in enumerate(components[:MAX_IMAGES_PER_MESSAGE]):
                 item = await self._capture_one(umo, component)
                 if item is not None:
-                    saved.append(item)
+                    saved.append(CapturedMedia(slot, *item))
         except BaseException:
             # 尚未交给缓冲的整批产物仍由文件 adapter 持有。
-            self.discard(path for path, _ in saved)
+            self.discard(item.path for item in saved)
             raise
         return saved
 
@@ -172,20 +182,20 @@ class MediaStore:
         self,
         umo: str,
         components: Sequence[Any],
-    ) -> list[tuple[str, int]]:
-        """转存一条消息里的语音，返回 ``(路径, 字节数)``，失败的直接跳过。
+    ) -> list[CapturedMedia]:
+        """转存语音，失败时跳过文件但不重排原始组件位置。
 
         语音原样复制，不做重编码：silk/amr 等格式由核心在发请求时转成 wav，
         插件只负责「消息淘汰时能删掉」。转码放进插件会让依赖变重，收益也小。
         """
-        saved: list[tuple[str, int]] = []
+        saved: list[CapturedMedia] = []
         try:
-            for component in list(components)[:MAX_AUDIOS_PER_MESSAGE]:
+            for slot, component in enumerate(components[:MAX_AUDIOS_PER_MESSAGE]):
                 item = await self._capture_audio_one(umo, component)
                 if item is not None:
-                    saved.append(item)
+                    saved.append(CapturedMedia(slot, *item))
         except BaseException:
-            self.discard(path for path, _ in saved)
+            self.discard(item.path for item in saved)
             raise
         return saved
 

@@ -106,8 +106,74 @@ def test_build_prompt_uses_same_render_for_chat_model() -> None:
     assert "署名" not in prompt
 
 
-def test_build_prompt_explains_attachment_order() -> None:
-    """记录里有图片占位时说明附件顺序：图不在文本里，模型只能靠顺序对应。"""
+def test_media_labels_number_only_attached_media() -> None:
+    """预热历史里的占位没有文件、拿不到编号；被条数上限挡掉的旧图也一样。"""
+    buffer = ContextBuffer()
+    buffer.configure_media(enabled=True, max_edge=1280, quality=80)
+    history = ChatMessage(
+        "小明", "", TS, sender_id="1", kind="image", parts=({"type": "image"},)
+    )
+    old = ChatMessage(
+        "小红",
+        "",
+        TS + 1,
+        sender_id="2",
+        kind="image",
+        parts=({"type": "image"},),
+        images=("C:/tmp/a.png",),
+    )
+    fresh = ChatMessage(
+        "小红",
+        "",
+        TS + 2,
+        sender_id="2",
+        kind="image",
+        parts=({"type": "image"},),
+        images=("C:/tmp/b.png",),
+    )
+
+    labels = buffer.media_labels([history, old, fresh], image_limit=1, audio_limit=0)
+
+    assert id(history) not in labels
+    assert labels[id(old)] == {"image": [None]}
+    assert labels[id(fresh)] == {"image": ["图片 1"]}
+
+
+def test_build_prompt_numbers_only_attached_media() -> None:
+    """带编号的占位才是附件：预热历史的 [图片] 不能把新图错位到旧消息上。"""
+    target = parse_target("aiocqhttp:GroupMessage:1")
+    assert target is not None
+    buffer = ContextBuffer()
+    buffer.configure_media(enabled=True, max_edge=1280, quality=80)
+    history = ChatMessage(
+        "小明", "", TS, sender_id="444066154", kind="image", parts=({"type": "image"},)
+    )
+    fresh = ChatMessage(
+        "小明",
+        "看这个",
+        TS + 60,
+        sender_id="444066154",
+        kind="image",
+        parts=({"type": "text"}, {"type": "image"}),
+        images=("C:/tmp/a.png",),
+    )
+    messages = [history, fresh]
+
+    prompt = build_prompt(
+        "接一句",
+        messages,
+        datetime(2026, 11, 3, 22, 21, tzinfo=TZ),
+        target,
+        media_labels=buffer.media_labels(messages, image_limit=8, audio_limit=0),
+    )
+
+    assert "看这个 [图片 1]" in prompt
+    assert "带编号的 [图片 n] / [语音 n] 是本条请求随附的附件" in prompt
+    assert "本次没有附带对应内容" in prompt
+
+
+def test_build_prompt_explains_placeholders_without_attachment() -> None:
+    """只有占位、没有附件（预热历史）时说明看不到内容，不按顺序暗示有附件。"""
     target = parse_target("aiocqhttp:GroupMessage:1")
     assert target is not None
     messages = [
@@ -128,7 +194,8 @@ def test_build_prompt_explains_attachment_order() -> None:
         target,
     )
 
-    assert "按记录里 [图片] / [语音] 出现的先后顺序排列" in prompt
+    assert "本次请求没有附带任何图片或语音" in prompt
+    assert "先后顺序" not in prompt
 
 
 def test_build_prompt_omits_attachment_note_for_pure_text() -> None:
