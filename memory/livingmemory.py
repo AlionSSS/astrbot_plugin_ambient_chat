@@ -34,6 +34,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
@@ -69,6 +70,16 @@ MAX_QUERY_CHARS = 200
 _SCOPE_MODE_KEY = "filtering_settings.memory_scope_mode"
 _ISOLATED_KEY = "filtering_settings.isolated_sessions"
 
+PROBE_OK = "ok"
+PROBE_NOT_INSTALLED = "not_installed"
+PROBE_LOAD_FAILED = "load_failed"
+PROBE_DISABLED = "disabled"
+PROBE_NOT_READY = "not_ready"
+"""``MemoryProbe.detail`` 的取值。
+
+依次是：可用 / 没装 / 装了但没加载成功 / 装了没启用 / 启用了还没就绪。
+"""
+
 SenderRef = tuple[str, str]
 """``(sender_id, sender_name)``；昵称只用于 ``identity_aliases`` 映射，可为空串。"""
 
@@ -85,6 +96,32 @@ class MemoryItem:
     """写入时间（epoch 秒）；解析不出来时为 ``None``，渲染时不编造时间。"""
     session_id: str | None = None
     persona_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryProbe:
+    """LivingMemory 可调用性探测结果。
+
+    只读插件注册表与实例状态，不碰数据库、不发请求，因此可以在 WebUI 的开关
+    事件里同步调用。
+    """
+
+    available: bool
+    """现在能否正常召回：插件已启用、初始化完成、引擎与配置都在。"""
+
+    installed: bool
+    """AstrBot 插件注册表里是否有这个插件（装了但被禁用也算 ``True``）。"""
+
+    detail: str
+    """不可用的原因，取值见 :data:`PROBE_OK` 等常量。"""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "available": self.available,
+            "installed": self.installed,
+            "detail": self.detail,
+            "plugin_name": LIVINGMEMORY_PLUGIN_NAME,
+        }
 
 
 class LivingMemoryRecall:
@@ -110,6 +147,27 @@ class LivingMemoryRecall:
     def available(self) -> bool:
         """LivingMemory 是否已加载（同步、只看注册表，不碰数据库）。"""
         return _find_plugin(self._context) is not None
+
+    def probe(self) -> MemoryProbe:
+        """检查 LivingMemory 现在能否正常召回。
+
+        开启长期记忆前先问一句：不只是「装没装」，还要「启用没启用」「初始化完没完」。
+        LivingMemory 的初始化是异步的，刚启动时可能还没就绪，此时开启只会静默跳过
+        召回，用户会以为配置没生效。
+        """
+        metadata = _find_metadata(self._context)
+        if metadata is None:
+            # 注册表里没有：装了但导入失败（依赖缺失、报错）时也是这样，靠目录区分。
+            if _plugin_dir_exists():
+                return MemoryProbe(False, True, PROBE_LOAD_FAILED)
+            return MemoryProbe(False, False, PROBE_NOT_INSTALLED)
+        if not bool(getattr(metadata, "activated", True)):
+            return MemoryProbe(False, True, PROBE_DISABLED)
+        # 插件被禁用时 star_cls 为 None，此时仍算「装了没启用」。
+        plugin = getattr(metadata, "star_cls", None)
+        if plugin is None or not _engine_ready(plugin):
+            return MemoryProbe(False, True, PROBE_NOT_READY)
+        return MemoryProbe(True, True, PROBE_OK)
 
     async def recall(
         self,
@@ -390,20 +448,56 @@ def _find_plugin(context: Any) -> Any | None:
     插件可能被禁用或热重载：每次调用都重新查注册表，不缓存实例（旧实例的数据库
     已经关闭）。
     """
+    return _instance_from(_find_metadata(context))
+
+
+def _find_metadata(context: Any) -> Any | None:
+    """取 LivingMemory 的 ``StarMetadata``；注册表里没有时返回 ``None``。
+
+    被禁用的插件仍然留在注册表里（``activated=False``、``star_cls=None``），
+    :meth:`LivingMemoryRecall.probe` 靠这一点区分「没装」与「装了没启用」。
+    """
     getter = getattr(context, "get_registered_star", None)
     if callable(getter):
         try:
             metadata = getter(LIVINGMEMORY_PLUGIN_NAME)
         except Exception:  # noqa: BLE001
             metadata = None
-        instance = _instance_from(metadata)
-        if instance is not None:
-            return instance
+        if metadata is not None:
+            return metadata
     try:
         from astrbot.core.star.star import star_map
     except Exception:  # noqa: BLE001
         return None
-    return _instance_from(star_map.get(LIVINGMEMORY_MODULE_PATH))
+    return star_map.get(LIVINGMEMORY_MODULE_PATH)
+
+
+def _engine_ready(plugin: Any) -> bool:
+    """``initializer`` 已初始化，且 ``memory_engine`` 与 ``config_manager`` 都在。"""
+    initializer = getattr(plugin, "initializer", None)
+    if initializer is None:
+        return False
+    if not bool(getattr(initializer, "is_initialized", False)):
+        return False
+    if getattr(initializer, "memory_engine", None) is None:
+        return False
+    return getattr(plugin, "config_manager", None) is not None
+
+
+def _plugin_dir_exists() -> bool:
+    """插件目录是否存在。
+
+    注册表里查不到插件时用来区分「没装」与「装了但没加载成功」（依赖缺失、导入报错、
+    目录名与插件名不一致）。取不到 AstrBot 路径时按没装处理。
+    """
+    try:
+        from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
+
+        plugin_dir = Path(get_astrbot_plugin_path()) / LIVINGMEMORY_PLUGIN_NAME
+        return plugin_dir.is_dir()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[Ambient] 未能判断 LivingMemory 插件目录：%s", exc)
+        return False
 
 
 def _instance_from(metadata: Any) -> Any | None:

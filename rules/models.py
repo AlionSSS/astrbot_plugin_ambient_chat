@@ -259,6 +259,8 @@ class Settings:
     """「建议调整 AstrBot 侧配置」提示是否已展示过：跨会话只提示一次。"""
     decision_debug_enabled: bool = False
     """是否记录完整决策请求与响应；默认关闭，文件按数量与总字节数轮转。"""
+    chat_debug_enabled: bool = False
+    """是否记录完整对话模型请求与响应；默认关闭，独立目录、同样的轮转规则。"""
     memory_recall_enabled: bool = DEFAULT_MEMORY_RECALL_ENABLED
     """是否在判定与生成前召回 LivingMemory 的长期记忆（ADR-0013）。"""
     memory_recall_k: int = DEFAULT_MEMORY_RECALL_K
@@ -285,6 +287,7 @@ class Settings:
             "cache_images_advice_seen": self.cache_images_advice_seen,
             "astrbot_config_advice_seen": self.astrbot_config_advice_seen,
             "decision_debug_enabled": self.decision_debug_enabled,
+            "chat_debug_enabled": self.chat_debug_enabled,
             "memory_recall_enabled": self.memory_recall_enabled,
             "memory_recall_k": self.memory_recall_k,
             "memory_recall_fanout": self.memory_recall_fanout,
@@ -406,6 +409,10 @@ class Settings:
         if not isinstance(debug_enabled, bool):
             raise RuleError("决策调试日志开关必须是布尔值")
 
+        chat_debug_enabled = raw.get("chat_debug_enabled", False)
+        if not isinstance(chat_debug_enabled, bool):
+            raise RuleError("对话模型调试日志开关必须是布尔值")
+
         memory_enabled = _parse_bool(
             raw.get("memory_recall_enabled"), DEFAULT_MEMORY_RECALL_ENABLED
         )
@@ -441,6 +448,7 @@ class Settings:
             cache_images_advice_seen=advice_seen,
             astrbot_config_advice_seen=astrbot_advice_seen,
             decision_debug_enabled=debug_enabled,
+            chat_debug_enabled=chat_debug_enabled,
             memory_recall_enabled=memory_enabled,
             memory_recall_k=memory_k,
             memory_recall_fanout=memory_fanout,

@@ -421,7 +421,7 @@
                   <ul class="hint-list">
                     <li>判定「要不要说话」与生成正文前，先查这个会话相关的长期记忆；同一次发言只召回一次，判定结果与生成共用，不重复开销。</li>
                     <li>「群聊并联人数」仅在 LivingMemory 中记忆作用域模式为 user 时生效：群聊查最近几个发言者，私聊只查对端。</li>
-                    <li>LivingMemory 未安装或未就绪时自动跳过，不影响发言；本插件的召回<b>不计入记忆访问统计</b>。</li>
+                    <li>开启时会先检查 LivingMemory 是否可正常调用：未安装或未启用会弹窗提示并保持关闭。运行中偶发不可用（如仍在初始化）时自动跳过，不影响发言；本插件的召回<b>不计入记忆访问统计</b>。</li>
                   </ul>
                 </div>
               </span>
@@ -474,12 +474,12 @@
           <div class="panel">
             <h2>调试
               <span class="section-help pop-anchor-right">
-                <button class="help-icon" type="button" aria-label="关于决策调试日志" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <button class="help-icon" type="button" aria-label="关于调试日志" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
-                    <li>记录完整的决策请求与响应，<b>包含人格和聊天内容</b>，仅在排查问题时开启。</li>
+                    <li>决策日志记录完整的决策请求与响应，对话日志记录生成正文时的系统人格、提示词、图片/语音路径与模型回复，两者都<b>包含人格和聊天内容</b>，仅在排查问题时开启。</li>
                     <li>保存后生效；关闭后停止记录，已有文件保留。</li>
-                    <li>日志位于插件数据目录的 decision_debug 文件夹，最多保留最近 100 条，总量不超过 10 MiB，超限自动删除旧记录。</li>
+                    <li>日志位于插件数据目录的 decision_debug / chat_debug 文件夹，各自最多保留最近 100 条，总量不超过 10 MiB，超限自动删除旧记录。</li>
                   </ul>
                 </div>
               </span>
@@ -487,11 +487,19 @@
             <div class="setting-line">
               <label class="switch">
                 <input id="setting-decision-debug" type="checkbox" />
-                <span>记录决策调试日志</span>
+                <span>记录决策模型调用日志</span>
               </label>
               <span class="tag">默认关闭</span>
             </div>
             <p class="hint">记录决策请求与响应，含人格与聊天内容，仅在排查问题时开启。</p>
+            <div class="setting-line">
+              <label class="switch">
+                <input id="setting-chat-debug" type="checkbox" />
+                <span>记录对话模型调用日志</span>
+              </label>
+              <span class="tag">默认关闭</span>
+            </div>
+            <p class="hint">记录生成正文时的提示词与模型回复，含人格与聊天内容，仅在排查问题时开启。</p>
           </div>
 
           <div class="settings-actions">

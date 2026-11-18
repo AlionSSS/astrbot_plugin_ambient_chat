@@ -1,5 +1,5 @@
 /** 更多设置页：运行参数、自定义决策模型与运行信息。 */
-import { apiPost } from '../api.js';
+import { apiGet, apiPost } from '../api.js';
 import { finishSaved } from '../shell.js';
 import { on, state } from '../store.js';
 import { askConfirm, askInfo, toast } from '../ui.js';
@@ -30,6 +30,7 @@ export function renderSettings() {
   $('#setting-memory-k').value = settings.memory_recall_k;
   $('#setting-memory-fanout').value = settings.memory_recall_fanout;
   $('#setting-decision-debug').checked = Boolean(settings.decision_debug_enabled);
+  $('#setting-chat-debug').checked = Boolean(settings.chat_debug_enabled);
   syncSegmentedFields();
   syncImageCacheFields();
   syncMemoryFields();
@@ -295,6 +296,7 @@ async function saveSettings() {
       memory_recall_k: Number($('#setting-memory-k').value),
       memory_recall_fanout: Number($('#setting-memory-fanout').value),
       decision_debug_enabled: $('#setting-decision-debug').checked,
+      chat_debug_enabled: $('#setting-chat-debug').checked,
       decision_models: clone(state.decisionModels),
       // 后端按整对象解析，漏传会重置成默认值（false），导致再次弹提示。
       cache_images_advice_seen: Boolean(
@@ -388,6 +390,71 @@ async function guardCacheAudioToggle() {
   }
 }
 
+/** 正在等待 LivingMemory 探测结果：连点复选框时不重复请求。 */
+let memoryProbePending = false;
+
+/**
+ * 把探测结果翻译成一句能照着做的话。
+ *
+ * 后端只区分四种状态（见 `memory/livingmemory.py` 的 `PROBE_*`），因为「为什么不可用」
+ * 决定用户该去装插件、去启用插件，还是等一会儿再试。
+ */
+function memoryUnavailableText(probe) {
+  switch (probe?.detail) {
+    case 'not_installed':
+      return (
+        '未检测到 LivingMemory 插件（astrbot_plugin_livingmemory），无法开启长期记忆。' +
+        '请先在 AstrBot 的「插件管理」里安装并启用它，再回来开启。'
+      );
+    case 'load_failed':
+      return (
+        'LivingMemory 插件文件在，但没能加载成功（可能缺少依赖、导入报错，或目录名与插件名不一致）。' +
+        '请到 AstrBot 的「插件管理」查看它的加载提示，修复后重新加载，再回来开启。'
+      );
+    case 'disabled':
+      return (
+        '检测到 LivingMemory 插件，但它当前未启用，无法开启长期记忆。' +
+        '请到 AstrBot 的「插件管理」里启用 astrbot_plugin_livingmemory，再回来开启。'
+      );
+    case 'not_ready':
+      return (
+        'LivingMemory 插件已启用，但还没有初始化完成（可能仍在启动，或加载时出错）。' +
+        '此时开启不会召回任何记忆：请稍候重试；若一直如此，请到「插件管理」查看它的运行状态。'
+      );
+    default:
+      return 'LivingMemory 插件当前不可用，无法开启长期记忆。请先安装并启用它。';
+  }
+}
+
+/**
+ * 勾选「长期记忆」前先确认 LivingMemory 真的能调用：不可用就回退勾选并弹窗说明。
+ *
+ * 只查插件状态、不发请求，因此每次开启都查也不会有额外开销；探测失败（接口报错）
+ * 同样回退，避免留下一个看似开启、实际静默跳过的开关。
+ */
+async function guardMemoryToggle() {
+  if (memoryProbePending) return;
+  const checkbox = $('#setting-memory-enabled');
+  if (!checkbox?.checked) return;
+  memoryProbePending = true;
+  try {
+    let probe = null;
+    try {
+      probe = await apiGet('settings/memory_probe');
+    } catch (error) {
+      checkbox.checked = false;
+      toast(error?.message || '未能确认 LivingMemory 是否可用', true);
+      return;
+    }
+    if (probe?.available) return;
+    checkbox.checked = false;
+    await askInfo(memoryUnavailableText(probe), '无法开启长期记忆');
+  } finally {
+    memoryProbePending = false;
+    syncMemoryFields();
+  }
+}
+
 document.addEventListener('change', (event) => {
   if (event.target.id === 'setting-cache-images') {
     syncImageCacheFields();
@@ -398,6 +465,7 @@ document.addEventListener('change', (event) => {
     syncSegmentedFields();
   } else if (event.target.id === 'setting-memory-enabled') {
     syncMemoryFields();
+    guardMemoryToggle();
   }
 });
 

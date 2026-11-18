@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
-from astrbot_plugin_ambient_chat.rules.models import DecisionModel
+from astrbot_plugin_ambient_chat.rules.models import DecisionModel, RuleError
 from astrbot_plugin_ambient_chat.rules.store import RuleStore
 from astrbot_plugin_ambient_chat.speech import debug_log
 from astrbot_plugin_ambient_chat.speech.decision import (
@@ -28,6 +28,17 @@ def test_debug_setting_defaults_off_and_persists(tmp_path):
     restored.update_settings({"decision_debug_enabled": False})
     store.load(ZoneInfo("UTC"))
     assert not store.settings.decision_debug_enabled
+
+
+def test_chat_debug_setting_defaults_off_and_persists(tmp_path):
+    store = RuleStore(tmp_path)
+    assert not store.settings.chat_debug_enabled
+    store.update_settings({"chat_debug_enabled": True})
+    restored = RuleStore(tmp_path)
+    restored.load(ZoneInfo("UTC"))
+    assert restored.settings.chat_debug_enabled
+    with pytest.raises(RuleError, match="对话模型调试日志开关"):
+        store.update_settings({"chat_debug_enabled": "yes"})
 
 
 def test_debug_writer_requires_opt_in_and_rotates_count_and_bytes(

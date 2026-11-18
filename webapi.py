@@ -129,6 +129,12 @@ class AmbientWebApi:
                 "记录「建议调整 AstrBot 侧配置」提示已展示",
             ),
             (
+                f"{ROUTE_PREFIX}/settings/memory_probe",
+                self.probe_memory_recall,
+                ["GET"],
+                "检查 LivingMemory 插件是否可正常召回（开启长期记忆前确认）",
+            ),
+            (
                 f"{ROUTE_PREFIX}/configuration/apply",
                 self.apply_configuration,
                 ["POST"],
@@ -459,6 +465,10 @@ class AmbientWebApi:
         return json_response(
             {"settings": settings.to_dict(), "saved": True, "application": application}
         )
+
+    async def probe_memory_recall(self) -> Any:
+        """检查 LivingMemory 是否可正常调用：只读注册表，不触碰记忆库。"""
+        return json_response(self._plugin.recall.probe().to_dict())
 
     async def mark_cache_images_advice_seen(self) -> Any:
         """只写提示标记：不影响运行中的调度，因此不重新应用配置。"""

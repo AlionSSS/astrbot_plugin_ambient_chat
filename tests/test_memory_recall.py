@@ -193,6 +193,62 @@ async def test_missing_plugin_returns_empty() -> None:
     assert await recall.recall("出差", umo=UMO) == []
 
 
+def test_probe_reports_missing_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """注册表与插件目录都没有：提示去安装，而不是去启用。"""
+    monkeypatch.setattr(livingmemory, "_plugin_dir_exists", lambda: False)
+
+    probe = LivingMemoryRecall(_Context(None)).probe()
+
+    assert probe.available is False
+    assert probe.installed is False
+    assert probe.detail == livingmemory.PROBE_NOT_INSTALLED
+
+
+def test_probe_reports_load_failed_plugin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """目录在但注册表没有：装上却加载失败，不能提示成「没装」。"""
+    monkeypatch.setattr(livingmemory, "_plugin_dir_exists", lambda: True)
+
+    probe = LivingMemoryRecall(_Context(None)).probe()
+
+    assert probe.available is False
+    assert probe.installed is True
+    assert probe.detail == livingmemory.PROBE_LOAD_FAILED
+
+
+def test_probe_reports_disabled_plugin() -> None:
+    """被禁用的插件仍在注册表里：不能说成「没装」，提示语要去启用而不是去安装。"""
+
+    class _DisabledContext:
+        def get_registered_star(self, name: str) -> Any:
+            assert name == livingmemory.LIVINGMEMORY_PLUGIN_NAME
+            return SimpleNamespace(activated=False, star_cls=None)
+
+    probe = LivingMemoryRecall(_DisabledContext()).probe()
+
+    assert probe.available is False
+    assert probe.installed is True
+    assert probe.detail == livingmemory.PROBE_DISABLED
+
+
+def test_probe_reports_not_ready_plugin() -> None:
+    engine = _Engine([])
+    recall = LivingMemoryRecall(_Context(_plugin(engine, _Config(), ready=False)))
+
+    probe = recall.probe()
+
+    assert probe.available is False
+    assert probe.installed is True
+    assert probe.detail == livingmemory.PROBE_NOT_READY
+
+
+def test_probe_reports_ready_plugin() -> None:
+    engine = _Engine([])
+    probe = LivingMemoryRecall(_Context(_plugin(engine, _Config()))).probe()
+
+    assert probe.available is True
+    assert probe.to_dict()["detail"] == livingmemory.PROBE_OK
+
+
 @pytest.mark.asyncio
 async def test_unready_plugin_returns_empty() -> None:
     engine = _Engine([_result()])

@@ -14,9 +14,10 @@ import asyncio
 import json
 import random
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
@@ -33,6 +34,7 @@ from ..conversation.context_buffer import ContextBuffer
 from ..conversation.messages import SELF_NAME, ChatMessage, to_datetime
 from ..memory import render_memory_block
 from ..rules.models import Settings
+from .debug_log import to_jsonable, write_debug_record
 from .memory import delivery_memory_chars, recall_memories
 from .segments import is_blocked_platform, split
 
@@ -47,6 +49,9 @@ MAX_IMAGES = 8
 
 MAX_AUDIOS = 2
 """单次请求最多附带的缓冲语音数：语音信息密度低，太多只是白烧 token。"""
+
+CHAT_DEBUG_DIRNAME = "chat_debug"
+"""对话模型调试日志目录，与决策日志分开，各自轮转。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +90,7 @@ class Delivery:
         self_name: Callable[[str], str] | None = None,
         settings: Callable[[], Settings] | None = None,
         recall: LivingMemoryRecall | None = None,
+        data_dir: Callable[[], Path] | None = None,
     ) -> None:
         self._context = context
         self._buffer = buffer
@@ -94,6 +100,8 @@ class Delivery:
         """运行参数来源；缺省时用默认值，测试与旧调用方不必提供。"""
         self._recall = recall
         """长期记忆客户端；缺省时该能力整体关闭。"""
+        self._data_dir = data_dir
+        """插件数据目录来源；缺省时不写对话模型调试日志。"""
         self._timezone: tzinfo | None = None
 
     async def prepare(
@@ -194,13 +202,31 @@ class Delivery:
         system_prompt: str,
         image_urls: list[str],
         audio_urls: list[str] | None = None,
+        *,
+        umo: str = "",
+        stage: str = "initial",
     ) -> Any:
         """单独请求一次对话模型；失败返回 None，由调用方决定是否重试。
 
         只走 ``provider.text_chat``，不传会话对象、不产生会话历史写入。
+        ``umo`` / ``stage`` 仅用于调试日志的定位信息。
         """
         logger.info("[Ambient] 对话模型请求（%s）", provider_id)
         started = time.perf_counter()
+        request = {
+            "provider_id": provider_id,
+            "system_prompt": system_prompt,
+            "prompt": prompt,
+            "image_urls": list(image_urls),
+            "audio_urls": list(audio_urls or ()),
+        }
+        meta = {
+            "provider_id": provider_id,
+            "umo": umo,
+            "stage": stage,
+            "image_count": len(image_urls),
+            "audio_count": len(audio_urls or ()),
+        }
         try:
             response = await self._context.llm_generate(
                 chat_provider_id=provider_id,
@@ -211,6 +237,13 @@ class Delivery:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[Ambient] 生成失败：%s", exc)
+            self._debug_record(
+                "chat",
+                request,
+                started=started,
+                meta=meta,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             return None
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -220,7 +253,38 @@ class Delivery:
             elapsed_ms,
             len(getattr(response, "completion_text", "") or ""),
         )
+        self._debug_record(
+            "chat",
+            request,
+            _response_payload(response),
+            started=started,
+            meta=meta,
+        )
         return response
+
+    def _debug_record(
+        self,
+        kind: str,
+        request: Any,
+        response: Any = None,
+        *,
+        started: float,
+        meta: Mapping[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        """写入时读取已保存开关，关闭后在途请求也不再落盘。"""
+        if self._data_dir is None or not self._settings().chat_debug_enabled:
+            return
+        write_debug_record(
+            kind,
+            request,
+            response,
+            directory=self._data_dir() / CHAT_DEBUG_DIRNAME,
+            enabled=True,
+            meta=meta,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            error=error,
+        )
 
     async def _prepare(
         self,
@@ -265,7 +329,13 @@ class Delivery:
                 limit=MAX_AUDIOS if self._allows_audio(provider_id) else 0,
             ) as audio_urls:
                 response = await self._generate(
-                    provider_id, prompt, persona_prompt, image_urls, audio_urls
+                    provider_id,
+                    prompt,
+                    persona_prompt,
+                    image_urls,
+                    audio_urls,
+                    umo=umo,
+                    stage="initial",
                 )
             if response is None and audio_urls:
                 # 逐级退让：先只丢语音（音频支持最不稳定），图片往往还能用。
@@ -276,7 +346,13 @@ class Delivery:
                     len(image_urls),
                 )
                 response = await self._generate(
-                    provider_id, prompt, persona_prompt, image_urls, []
+                    provider_id,
+                    prompt,
+                    persona_prompt,
+                    image_urls,
+                    [],
+                    umo=umo,
+                    stage="without-audio",
                 )
         if response is None and image_urls:
             # 网络、额度等临时错误不能作为模型不支持媒体的证据，只影响本次。
@@ -285,7 +361,15 @@ class Delivery:
                 umo,
                 len(image_urls),
             )
-            response = await self._generate(provider_id, prompt, persona_prompt, [], [])
+            response = await self._generate(
+                provider_id,
+                prompt,
+                persona_prompt,
+                [],
+                [],
+                umo=umo,
+                stage="text-only",
+            )
         if response is None:
             return None
 
@@ -544,6 +628,17 @@ def _last_message_at(messages: list[ChatMessage], tz: tzinfo) -> datetime | None
     if not messages:
         return None
     return to_datetime(messages[-1].timestamp, tz)
+
+
+def _response_payload(response: Any) -> dict[str, Any]:
+    """只挑可读字段：``raw_completion`` 体积大且与 ``completion_text`` 重复。"""
+    usage = getattr(response, "usage", None)
+    return {
+        "role": getattr(response, "role", ""),
+        "completion_text": getattr(response, "completion_text", "") or "",
+        "reasoning_content": getattr(response, "reasoning_content", None),
+        "usage": to_jsonable(usage) if usage is not None else None,
+    }
 
 
 def _parse_history(raw: Any) -> list[dict]:

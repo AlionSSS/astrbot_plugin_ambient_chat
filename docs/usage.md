@@ -46,6 +46,8 @@
 
 需要同时安装 LivingMemory 插件；只在真正用得上时召回：决策模型在判定前取一次并复用给生成，概率放行则在放行后、生成前取（被拒的那次不检索）。未安装或未就绪时自动跳过，不影响发言（见 `docs/adr/0013`）。
 
+开启开关时会先检查 LivingMemory 能否正常调用：没安装、装了但加载失败、装了没启用、启用了但还没初始化完成，都会弹窗说明原因并把开关回退为关闭（安装或启用后重新开启即可）。运行中偶发不可用（如仍在初始化）仍按「没有记忆」继续。
+
 | 设置项 | 字段 | 范围 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | 是否召回长期记忆 | `memory_recall_enabled` | 开关 | 关闭 | 开启后，判定与生成前先查这个会话相关的长期记忆；记忆充当语境，不作为事实来源 |
@@ -77,7 +79,9 @@
 
 `decision_debug_enabled` 默认 `false`，在「更多设置 → 调试」勾选后保存启用。官方决策、自定义决策和模型测试均遵循此开关；记录包含完整请求与响应，可能包含人格、聊天内容和会话标识。
 
-日志位于插件数据目录的 `decision_debug/`，最多保留最近 100 条 JSON 记录、总计 10 MiB，超限自动删除旧记录；单条超过 10 MiB 不保存。关闭后停止写入，在途请求也不再落盘，已有日志保留，可手动删除。旧版写入系统临时目录 `astrbot_ambient_debug/` 的文件不纳入新目录轮转，需自行清理。
+`chat_debug_enabled` 默认 `false`，同样在「更多设置 → 调试」勾选后保存启用。记录每次生成正文的对话模型请求与响应：对话模型 ID、系统人格、提示词、附带的图片与语音路径、模型回复文本、思考内容与用量；带语音/图片失败后的降级重试各记一条，`meta.stage` 标明是首次、去掉语音还是纯文本。
+
+日志分别位于插件数据目录的 `decision_debug/` 与 `chat_debug/`，每个目录最多保留最近 100 条 JSON 记录、总计 10 MiB，超限自动删除旧记录；单条超过 10 MiB 不保存。关闭后停止写入，在途请求也不再落盘，已有日志保留，可手动删除。旧版写入系统临时目录 `astrbot_ambient_debug/` 的文件不纳入新目录轮转，需自行清理。
 
 ## 规则参数
 
@@ -123,7 +127,7 @@
 
 失败时「运行管理」该会话行会标红并写出原因，便于区分排查方向：
 
-- `决策失败：决策平台内容审核未通过（会话含敏感内容），本次已跳过`：请求格式与配置都没问题，是最近的会话内容或人格提示被平台判为敏感。勾选「更多设置 → 调试 → 记录决策调试日志」后，可在 `plugin_data/astrbot_plugin_ambient_chat/decision_debug/` 查看落到平台的那份请求。
+- `决策失败：决策平台内容审核未通过（会话含敏感内容），本次已跳过`：请求格式与配置都没问题，是最近的会话内容或人格提示被平台判为敏感。勾选「更多设置 → 调试 → 记录决策模型调用日志」后，可在 `plugin_data/astrbot_plugin_ambient_chat/decision_debug/` 查看落到平台的那份请求。
 - `决策失败：…` / `决策异常：…`：端点、鉴权、模型名或响应格式问题，按括号后的简述修配置即可。
 
 ### 其他规则字段
@@ -200,7 +204,7 @@
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "settings": {
     "concurrency": 1,
     "send_interval_seconds": 2.0,
@@ -211,6 +215,7 @@
     "image_max_edge": 1280,
     "image_quality": 80,
     "decision_debug_enabled": false,
+    "chat_debug_enabled": false,
     "decision_models": [
       {
         "id": "judge",
@@ -268,4 +273,4 @@
 }
 ```
 
-关于 `schema_version`：当前为 `7`（`3` 起多出 `decision_models`，`4` 起多出 `cache_images_advice_seen`，`5` 起多出默认关闭的 `decision_debug_enabled`，`6` 起多出默认关闭的 `cache_audio`，`7` 起多出 `astrbot_config_advice_seen`；旧文件缺字段时按默认值读取）。读盘只按缺省值补齐、没有版本上界守卫；因此把新版文件拿回旧版插件时，旧版会按 `platform_id` 去重，**静默丢弃**同一机器人应用除第一条以外的绑定。
+关于 `schema_version`：当前为 `8`（`3` 起多出 `decision_models`，`4` 起多出 `cache_images_advice_seen`，`5` 起多出默认关闭的 `decision_debug_enabled`，`6` 起多出默认关闭的 `cache_audio`，`7` 起多出 `astrbot_config_advice_seen`，`8` 起多出默认关闭的 `chat_debug_enabled`；旧文件缺字段时按默认值读取）。读盘只按缺省值补齐、没有版本上界守卫；因此把新版文件拿回旧版插件时，旧版会按 `platform_id` 去重，**静默丢弃**同一机器人应用除第一条以外的绑定。

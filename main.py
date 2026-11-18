@@ -88,6 +88,7 @@ class AmbientChatPlugin(Star):
             self_name=self._self_name,
             settings=lambda: self.settings,
             recall=self.recall,
+            data_dir=lambda: self.store.data_dir,
         )
         self.lifecycle = BindingLifecycle(self)
         self.execution = SpeechExecution(

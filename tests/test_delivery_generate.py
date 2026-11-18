@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from astrbot_plugin_ambient_chat.conversation.context_buffer import ContextBuffer
+from astrbot_plugin_ambient_chat.rules.models import Settings
 from astrbot_plugin_ambient_chat.speech.delivery import Delivery
 
 
@@ -82,6 +84,57 @@ def test_undeclared_modalities_mean_no_media(modalities: list[str] | None) -> No
 
     assert not delivery._allows_images("p")
     assert not delivery._allows_audio("p")
+
+
+@pytest.mark.asyncio
+async def test_generate_writes_chat_debug_only_when_enabled(tmp_path) -> None:
+    settings = Settings()
+    delivery = Delivery(
+        _Context(),  # type: ignore[arg-type]
+        ContextBuffer(),
+        settings=lambda: settings,
+        data_dir=lambda: tmp_path,
+    )
+    directory = tmp_path / "chat_debug"
+
+    await delivery._generate("p1", "prompt", "system", ["a.jpg"], umo="u1")
+    assert not directory.exists()
+
+    settings.chat_debug_enabled = True
+    await delivery._generate("p1", "prompt", "system", ["a.jpg"], umo="u1")
+    records = list(directory.glob("*.json"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text(encoding="utf-8"))
+    assert payload["kind"] == "chat"
+    assert payload["meta"]["umo"] == "u1"
+    assert payload["meta"]["stage"] == "initial"
+    assert payload["request"]["prompt"] == "prompt"
+    assert payload["request"]["system_prompt"] == "system"
+    assert payload["request"]["image_urls"] == ["a.jpg"]
+    assert payload["response"]["completion_text"] == "好呀，早点睡"
+
+    settings.chat_debug_enabled = False
+    await delivery._generate("p1", "prompt", "system", [], umo="u1")
+    assert len(list(directory.glob("*.json"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_failure_is_logged_with_error(tmp_path) -> None:
+    settings = Settings(chat_debug_enabled=True)
+    delivery = Delivery(
+        _FailingContext(),  # type: ignore[arg-type]
+        ContextBuffer(),
+        settings=lambda: settings,
+        data_dir=lambda: tmp_path,
+    )
+
+    assert await delivery._generate("p2", "prompt", "", []) is None
+
+    records = list((tmp_path / "chat_debug").glob("*.json"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text(encoding="utf-8"))
+    assert payload["error"] == "RuntimeError: provider down"
+    assert payload["response"] is None
 
 
 def test_provider_lookup_failure_means_no_media() -> None:
