@@ -26,9 +26,13 @@ export function renderSettings() {
   $('#setting-cache-audio').checked = Boolean(settings.cache_audio);
   $('#setting-image-edge').value = settings.image_max_edge;
   $('#setting-image-quality').value = settings.image_quality;
+  $('#setting-memory-enabled').checked = Boolean(settings.memory_recall_enabled);
+  $('#setting-memory-k').value = settings.memory_recall_k;
+  $('#setting-memory-fanout').value = settings.memory_recall_fanout;
   $('#setting-decision-debug').checked = Boolean(settings.decision_debug_enabled);
   syncSegmentedFields();
   syncImageCacheFields();
+  syncMemoryFields();
   state.decisionModels = clone(settings.decision_models || []);
   state.decisionTestResults = {};
   renderDecisionModels();
@@ -65,6 +69,14 @@ function syncSegmentedFields() {
 function syncImageCacheFields() {
   const enabled = Boolean($('#setting-cache-images')?.checked);
   setGroupDisabled($('#image-cache-fields'), !enabled);
+}
+
+/** 召回条数与并联人数只在开启长期记忆时可改。 */
+function syncMemoryFields() {
+  const enabled = Boolean($('#setting-memory-enabled')?.checked);
+  const label = $('#setting-memory-state');
+  if (label) label.textContent = enabled ? '已开启' : '已关闭';
+  setGroupDisabled($('#memory-fields'), !enabled);
 }
 
 function blankDecisionModel() {
@@ -231,6 +243,9 @@ async function saveSettings() {
       cache_audio: $('#setting-cache-audio').checked,
       image_max_edge: Number($('#setting-image-edge').value),
       image_quality: Number($('#setting-image-quality').value),
+      memory_recall_enabled: $('#setting-memory-enabled').checked,
+      memory_recall_k: Number($('#setting-memory-k').value),
+      memory_recall_fanout: Number($('#setting-memory-fanout').value),
       decision_debug_enabled: $('#setting-decision-debug').checked,
       decision_models: clone(state.decisionModels),
       // 后端按整对象解析，漏传会重置成默认值（false），导致再次弹提示。
@@ -333,6 +348,8 @@ document.addEventListener('change', (event) => {
     guardCacheAudioToggle();
   } else if (event.target.id === 'setting-segmented-enabled') {
     syncSegmentedFields();
+  } else if (event.target.id === 'setting-memory-enabled') {
+    syncMemoryFields();
   }
 });
 

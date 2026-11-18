@@ -21,6 +21,7 @@ from .conversation.messages import (
     shape_from_parts,
     strip_system_reminder,
 )
+from .memory import LivingMemoryRecall
 from .rules.models import Binding
 from .rules.store import RuleStore
 from .runtime.account import BotAccountName, adapter_self_id
@@ -73,12 +74,15 @@ class AmbientChatPlugin(Star):
         self.blockers = BlockerChain(self.buffer)
         self.router = DecisionRouter(context, self.store)
         self.account = BotAccountName(context)
+        self.recall = LivingMemoryRecall(context)
+        """LivingMemory 召回客户端；插件未安装时其所有调用 fail-open。"""
         self.judge = IntentJudge(context, self.router, identity=self._identity)
         self.delivery = Delivery(
             context,
             self.buffer,
             self_name=self._self_name,
             settings=lambda: self.settings,
+            recall=self.recall,
         )
         self.lifecycle = BindingLifecycle(self)
         self.execution = SpeechExecution(

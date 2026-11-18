@@ -127,6 +127,17 @@ MAX_SENDER_ID_LENGTH = 128
 
 MAX_SELECTION_COUNT = 50
 
+MAX_MEMORY_RECALL_K = 5
+"""一次召回最多几条记忆：再多只会挤占判定与生成的词元。"""
+MAX_MEMORY_RECALL_FANOUT = 5
+"""群聊按最近几个人并联召回（仅 ``user`` 作用域有意义）。"""
+
+DEFAULT_MEMORY_RECALL_ENABLED = False
+"""默认不接长期记忆：LivingMemory 可能没装，记忆内容也可能与当前语境无关。"""
+
+DEFAULT_MEMORY_RECALL_K = 3
+DEFAULT_MEMORY_RECALL_FANOUT = 3
+
 CUSTOM_DECISION_PREFIX = "custom:"
 """规则里引用「更多设置」中自定义决策模型的前缀，后接模型 ID。"""
 
@@ -235,6 +246,12 @@ class Settings:
     """「建议调整 AstrBot 侧配置」提示是否已展示过：跨会话只提示一次。"""
     decision_debug_enabled: bool = False
     """是否记录完整决策请求与响应；默认关闭，文件按数量与总字节数轮转。"""
+    memory_recall_enabled: bool = DEFAULT_MEMORY_RECALL_ENABLED
+    """是否在判定与生成前召回 LivingMemory 的长期记忆（ADR-0013）。"""
+    memory_recall_k: int = DEFAULT_MEMORY_RECALL_K
+    """一次召回几条记忆。"""
+    memory_recall_fanout: int = DEFAULT_MEMORY_RECALL_FANOUT
+    """群聊按最近几个人并联召回；仅在 LivingMemory 使用「按人共享」作用域时生效。"""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -255,6 +272,9 @@ class Settings:
             "cache_images_advice_seen": self.cache_images_advice_seen,
             "astrbot_config_advice_seen": self.astrbot_config_advice_seen,
             "decision_debug_enabled": self.decision_debug_enabled,
+            "memory_recall_enabled": self.memory_recall_enabled,
+            "memory_recall_k": self.memory_recall_k,
+            "memory_recall_fanout": self.memory_recall_fanout,
         }
 
     @classmethod
@@ -373,6 +393,21 @@ class Settings:
         if not isinstance(debug_enabled, bool):
             raise RuleError("决策调试日志开关必须是布尔值")
 
+        memory_enabled = _parse_bool(
+            raw.get("memory_recall_enabled"), DEFAULT_MEMORY_RECALL_ENABLED
+        )
+        try:
+            memory_k = int(raw.get("memory_recall_k", DEFAULT_MEMORY_RECALL_K))
+            memory_fanout = int(
+                raw.get("memory_recall_fanout", DEFAULT_MEMORY_RECALL_FANOUT)
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuleError("记忆召回条数与他人并联数必须是整数") from exc
+        if not 1 <= memory_k <= MAX_MEMORY_RECALL_K:
+            raise RuleError(f"记忆召回条数需在 1~{MAX_MEMORY_RECALL_K} 之间")
+        if not 1 <= memory_fanout <= MAX_MEMORY_RECALL_FANOUT:
+            raise RuleError(f"记忆并联人数需在 1~{MAX_MEMORY_RECALL_FANOUT} 之间")
+
         return cls(
             concurrency=concurrency,
             send_interval_seconds=interval,
@@ -393,6 +428,9 @@ class Settings:
             cache_images_advice_seen=advice_seen,
             astrbot_config_advice_seen=astrbot_advice_seen,
             decision_debug_enabled=debug_enabled,
+            memory_recall_enabled=memory_enabled,
+            memory_recall_k=memory_k,
+            memory_recall_fanout=memory_fanout,
         )
 
 
@@ -587,7 +625,9 @@ class IntentConfig:
             raise RuleError(f"未知的发言意向机制：{mode}")
         # 旧规则的单一 `threshold` 读成「感兴趣阈值」：升级不丢用户调过的松紧。
         interest_threshold = _parse_threshold(
-            raw.get("interest_threshold", raw.get("threshold", DEFAULT_INTEREST_THRESHOLD)),
+            raw.get(
+                "interest_threshold", raw.get("threshold", DEFAULT_INTEREST_THRESHOLD)
+            ),
             "感兴趣阈值",
         )
         new_topic_threshold = _parse_threshold(

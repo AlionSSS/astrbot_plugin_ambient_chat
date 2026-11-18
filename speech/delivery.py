@@ -4,7 +4,8 @@
 也不受 ``platform_settings.ignore_bot_self_message`` 影响；发送成功后把这条发言作为
 assistant 追加进当前会话历史，让用户回复时核心能感知到。
 
-代价是表情包、记忆、装饰等依赖管线的插件不参与，见 ``docs/adr/0011``。
+代价是表情包、装饰等依赖管线的插件不参与，见 ``docs/adr/0011``；长期记忆由插件自己
+向 LivingMemory 召回后注入，见 ``docs/adr/0013``。
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import asyncio
 import json
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
@@ -30,12 +31,15 @@ from ..common import (
 )
 from ..conversation.context_buffer import ContextBuffer
 from ..conversation.messages import SELF_NAME, ChatMessage, to_datetime
+from ..memory import render_memory_block
 from ..rules.models import Settings
+from .memory import DELIVERY_MEMORY_CHARS, recall_memories
 from .segments import is_blocked_platform, split
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
 
+    from ..memory import LivingMemoryRecall, MemoryItem
     from ..rules.models import Rule
 
 MAX_IMAGES = 8
@@ -80,6 +84,7 @@ class Delivery:
         *,
         self_name: Callable[[str], str] | None = None,
         settings: Callable[[], Settings] | None = None,
+        recall: LivingMemoryRecall | None = None,
     ) -> None:
         self._context = context
         self._buffer = buffer
@@ -87,6 +92,8 @@ class Delivery:
         """机器人自身的署名来源；缺省时用「我」，测试与旧调用方不必提供。"""
         self._settings: Callable[[], Settings] = settings or Settings
         """运行参数来源；缺省时用默认值，测试与旧调用方不必提供。"""
+        self._recall = recall
+        """长期记忆客户端；缺省时该能力整体关闭。"""
         self._timezone: tzinfo | None = None
 
     async def prepare(
@@ -96,7 +103,14 @@ class Delivery:
         hint: str,
         persona_prompt: str = "",
         now: datetime | None = None,
+        *,
+        memories: Sequence[MemoryItem] | None = None,
     ) -> PreparedSpeech | None:
+        """组装并生成一次发言。
+
+        ``memories`` 是执行层已经召回好的记忆（判定阶段取过，这里复用）；``None``
+        表示调用方没有召回，本方法会自己取一次，供旧调用点与直接调用使用。
+        """
         target = parse_target(umo)
         if target is None:
             logger.warning("[Ambient] 非法目标会话：%s", umo)
@@ -107,6 +121,7 @@ class Delivery:
             hint,
             persona_prompt,
             now or datetime.now(self._tz()),
+            memories,
         )
 
     # ------------------------------------------------------------------ 工具
@@ -119,6 +134,30 @@ class Delivery:
                 configured = None
             self._timezone = resolve_timezone(str(configured or ""))
         return self._timezone
+
+    async def _memory_block(
+        self,
+        umo: str,
+        messages: list[ChatMessage],
+        memories: Sequence[MemoryItem] | None,
+    ) -> str:
+        """渲染长期记忆块；执行层已召回时直接复用，避免重复检索。
+
+        ``memories`` 为 ``None`` 才自己召回（旧调用点、直接调用），为空列表表示
+        「召回过但没有命中」，不再打第二次请求。
+        """
+        if self._recall is None:
+            return ""
+        items = (
+            memories
+            if memories is not None
+            else await recall_memories(self._recall, self._settings(), umo, messages)
+        )
+        if not items:
+            return ""
+        return render_memory_block(
+            items, max_chars=DELIVERY_MEMORY_CHARS, tz=self._tz()
+        )
 
     # ------------------------------------------------------------------ 生成
     def _allows_images(self, provider_id: str) -> bool:
@@ -186,6 +225,7 @@ class Delivery:
         hint: str,
         persona_prompt: str,
         now: datetime,
+        memories: Sequence[MemoryItem] | None = None,
     ) -> PreparedSpeech | None:
         umo = target.umo
         provider_id = rule.chat_provider_id
@@ -210,6 +250,7 @@ class Delivery:
             target,
             self_name=self_name,
             group_name=self._buffer.session_name(umo),
+            memory_block=await self._memory_block(umo, messages, memories),
         )
         with self._buffer.borrow_images(
             messages,
@@ -432,15 +473,19 @@ def build_prompt(
     *,
     self_name: str = "",
     group_name: str = "",
+    memory_block: str = "",
 ) -> str:
-    """拼用户消息：最近会话记录 → 时间与会话信息 → 发言提示。
+    """拼用户消息：最近会话记录 → 长期记忆 → 时间与会话信息 → 发言提示。
 
     人格走 ``system_prompt``，这里只放「这一次请求」的内容。记录块带说明与
     ``<recent_conversation>`` 包裹，避免模型把它当成用户刚发来的消息；
     ``self_name`` 非空时点明「记录里这个署名的发言是你自己」，与决策请求的
     ``state.self`` 一致，避免模型把账号昵称当成别的群友。``group_name`` 是
-    群聊的可读名称（私聊忽略），让模型知道这是个什么群。提示语放最后，
-    让模型最后看到的是任务本身。
+    群聊的可读名称（私聊忽略），让模型知道这是个什么群。
+
+    ``memory_block`` 是长期记忆（``<long_term_memory>`` 包裹），放在记录之后、
+    时间提醒之前：先说「以前聊过什么」，再说「现在几点、冷场多久」，最后才是
+    这次的任务，从背景到当下逐层收拢。
     """
     parts: list[str] = []
     transcript = ContextBuffer.render(
@@ -466,6 +511,9 @@ def build_prompt(
         parts.append(
             f"{note}\n<recent_conversation>\n{transcript}\n</recent_conversation>"
         )
+
+    if memory_block:
+        parts.append(memory_block)
 
     tag = format_reminder(
         now,

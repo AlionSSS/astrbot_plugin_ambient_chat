@@ -389,6 +389,35 @@
           </div>
 
           <div class="panel">
+            <h2>长期记忆</h2>
+            <p class="hint">
+              接入 LivingMemory 插件：判定「要不要说话」与生成正文前，先查这个会话相关的长期记忆。
+              同一次发言只召回一次，判定结果与生成共用，不重复开销。
+            </p>
+            <div class="setting-line">
+              <label class="switch">
+                <input id="setting-memory-enabled" type="checkbox" />
+                <span id="setting-memory-state">已关闭</span>
+              </label>
+              <span class="tag">默认关闭</span>
+            </div>
+            <div class="grid" id="memory-fields">
+              <label class="field">
+                <span>一次召回几条记忆<em>1~5</em></span>
+                <input id="setting-memory-k" type="number" min="1" max="5" step="1" />
+              </label>
+              <label class="field">
+                <span>群聊并联人数<em>1~5，仅 LivingMemory 按人共享时生效</em></span>
+                <input id="setting-memory-fanout" type="number" min="1" max="5" step="1" />
+              </label>
+            </div>
+            <p class="hint">
+              LivingMemory 未安装或未就绪时自动跳过，不影响发言；本插件的召回不计入记忆访问统计。
+              按人共享作用域下，群聊会查最近几个发言者，私聊只查对端。
+            </p>
+          </div>
+
+          <div class="panel">
             <h2>决策模型
               <span class="section-help pop-anchor-right">
                 <button class="help-icon" type="button" aria-label="关于 criteria" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>

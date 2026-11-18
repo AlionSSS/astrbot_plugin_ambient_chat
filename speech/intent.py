@@ -28,9 +28,12 @@ from ..conversation.messages import (
 )
 from ..rules.models import Rule
 from .decision import DecisionContentRejected, DecisionRouter, NoulPrompt
+from .memory import memory_entries
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
+
+    from ..memory import MemoryItem
 
 MODE_CONTINUE = "continue"
 MODE_NEW_TOPIC = "new_topic"
@@ -51,9 +54,7 @@ REASON_CONTENT_REJECTED = (
 REASON_DETAIL_LIMIT = 160
 """失败原因在页面上最多显示的字符数，完整信息仍写进 WARNING 与调试日志。"""
 
-_TIME_FIT_TIP = (
-    "请让这句话贴合当下的时间、语境。"
-)
+_TIME_FIT_TIP = "请让这句话贴合当下的时间、语境。"
 """三条提示共用的时间要求。
 
 具体的时间事实由 ``<system_reminder>`` 给出（当前时间 + 距最后一条消息多久），
@@ -157,7 +158,14 @@ class IntentJudge:
         umo: str,
         buffer: ContextBuffer,
         now: datetime,
+        *,
+        memories: Sequence[MemoryItem] | None = None,
     ) -> IntentResult:
+        """判定这次要不要发言。
+
+        ``memories`` 由执行层在拦截之后召回一次，判定与生成共用（ADR-0013）；
+        ``None`` 表示调用方没有召回（旧调用点），此时只是不下发记忆，不影响判定。
+        """
         if rule.intent.mode != INTENT_DECISION:
             return self._by_probability(rule.intent.pass_probability)
 
@@ -169,6 +177,9 @@ class IntentJudge:
         persona_prompt = await self.persona_prompt(umo) if rule.inject_persona else ""
         # 人格为空（未配置，或规则关闭了注入）时用中性占位，指令保持无条件。
         persona_prompt = persona_prompt or NEUTRAL_PERSONA_PROMPT
+        # 记忆条目要占 state 预算，先算出来再让对话让位：8K 上下文里
+        # 「对话 + 人格 + 记忆 + questions」是同一份额度。
+        memory_lines = memory_entries(memories or ())
         # 决策模型上下文有限（如 intern-decision-4b 只有 8K），超了会直接报错，
         # 因此在插件侧按字符预算裁剪：先砍最旧的对话，再压人格尾部。
         conversation, persona_prompt = _fit_conversation(
@@ -176,6 +187,7 @@ class IntentJudge:
             now.tzinfo or timezone.utc,
             persona_prompt,
             with_id=bool(target and target.is_group),
+            reserve=sum(len(line) for line in memory_lines) + len(memory_lines),
         )
         if not conversation:
             return IntentResult(False, MODE_CONTINUE, "上下文为空")
@@ -206,6 +218,10 @@ class IntentJudge:
         state["now"] = _format_now(now)
         state["scene"] = await self._scene(umo, messages, buffer)
         state["conversation"] = conversation
+        # 记忆是「以前提过的事」，用来判断「现在接话是否有话可说」；
+        # 空列表不下发该键，避免给判定模型一个空壳字段。
+        if memory_lines:
+            state["memory"] = memory_lines
 
         try:
             probabilities = await self._router.probabilities(
@@ -567,12 +583,16 @@ def _fit_conversation(
     persona: str,
     *,
     with_id: bool = False,
+    reserve: int = 0,
 ) -> tuple[list[dict[str, Any]], str]:
     """按字符预算裁剪对话与人格，返回 ``(消息条目, 人格)``。
 
     顺序：先给对话留够最小额度、限制人格长度；再用剩余预算从**最新**往旧保留
     条目（超出时丢最旧的整条）；单条消息仍放不下就只截正文，结构字段不动。
     成本按序列化后的 JSON 长度估算，避免 key 与引号等语法开销被漏算。
+
+    ``reserve`` 是同一份预算里已经被别的字段（长期记忆）占掉的字符数：记忆与对话
+    共用 8K 上下文，必须从剩余额度里先扣，不能叠加。
     """
     persona = persona.strip()
     persona_limit = min(
@@ -581,7 +601,7 @@ def _fit_conversation(
     )
     if len(persona) > persona_limit:
         persona = _cut(persona, persona_limit)
-    remaining = DECISION_STATE_CHAR_BUDGET - len(persona)
+    remaining = DECISION_STATE_CHAR_BUDGET - len(persona) - max(0, reserve)
 
     entries = [_message_entry(message, tz, with_id=with_id) for message in messages]
     kept: list[dict[str, Any]] = []

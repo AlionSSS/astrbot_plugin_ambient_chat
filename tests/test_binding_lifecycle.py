@@ -101,6 +101,8 @@ class Runtime:
         # 关注度落在与 settings.json 相同的数据目录，测试里就是临时的 path。
         self.attention = AttentionStore(path)
         self.router = SimpleNamespace(reload=AsyncMock())
+        self.recall = None
+        """长期记忆客户端；默认关闭，避免用例依赖 LivingMemory。"""
         self.judge = SimpleNamespace(
             judge=AsyncMock(return_value=IntentResult(True)),
             persona_prompt=AsyncMock(return_value=""),

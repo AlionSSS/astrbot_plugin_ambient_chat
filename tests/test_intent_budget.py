@@ -57,6 +57,19 @@ def test_long_persona_is_cut_and_keeps_conversation() -> None:
     assert _cost(conversation, persona) <= DECISION_STATE_CHAR_BUDGET
 
 
+def test_memory_reserve_shrinks_conversation_not_budget() -> None:
+    """记忆与对话共用同一份预算：给记忆留位置时只能少留对话（ADR-0013）。"""
+    messages = [
+        ChatMessage(sender_name=f"用户{index:03d}", text="字" * 300, timestamp=TS)
+        for index in range(40)
+    ]
+    full, persona_full = _fit_conversation(messages, TZ, "人设")
+    reserved, persona_reserved = _fit_conversation(messages, TZ, "人设", reserve=400)
+
+    assert len(reserved) < len(full)
+    assert _cost(reserved, persona_reserved) + 400 <= DECISION_STATE_CHAR_BUDGET
+
+
 def test_unknown_time_stays_none() -> None:
     conversation, _persona = _fit_conversation(
         [ChatMessage(sender_name="A", text="在吗", timestamp=0.0)], TZ, ""
