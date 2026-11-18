@@ -424,12 +424,28 @@ def test_render_block_skips_duplicates_and_respects_budget() -> None:
         MemoryItem(memory_id=4, content="丙", score=0.6),
     ]
 
-    block = render_memory_block(items, max_chars=60, tz=timezone.utc)
+    block = render_memory_block(items, max_chars=120, tz=timezone.utc)
 
     assert block.startswith(MEMORY_BLOCK_OPEN)
     assert block.count("甲") == 10
     assert "乙" in block and "乙" * 200 not in block
-    assert "丙" not in block
+    # 余量还够装一条短记忆：贪心装填不浪费额度，低分条目不因分数低被丢。
+    assert "丙" in block
+    body = block.split("\n")[2:-1]
+    assert sum(len(line) for line in body) <= 120
+
+
+def test_render_block_drops_entry_when_remaining_below_tail() -> None:
+    """余量只剩半句话时整条丢弃：把时间戳挤掉换半句记忆没有意义。"""
+    items = [
+        MemoryItem(memory_id=1, content="甲" * 50, score=0.9),
+        MemoryItem(memory_id=2, content="乙" * 50, score=0.5),
+    ]
+
+    block = render_memory_block(items, max_chars=60, tz=timezone.utc)
+
+    assert "甲" in block
+    assert "乙" not in block
 
 
 def test_render_block_neutralizes_markers_and_unknown_time() -> None:

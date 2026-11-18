@@ -323,6 +323,13 @@ code {
   right: 0;
 }
 
+/* 页面底部板块的卡片向上展开，避免落到视口外还要滚动才能看完 */
+.section-help.pop-above .help-pop {
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform: translateY(4px);
+}
+
 .section-help.pop-anchor-right {
   vertical-align: -3px;
 }
@@ -1017,17 +1024,65 @@ textarea {
   width: 160px;
 }
 
-/* 自定义决策模型卡片：长名称省略、删除按钮靠右。 */
-#decision-models .card-head b {
-  overflow: hidden;
+/* 自定义决策模型卡片：标题即名称输入框（平时像标题，聚焦才显出可编辑），删除按钮靠右。 */
+#decision-models .card-title {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+#decision-models .card-title:hover {
+  border-color: var(--line);
+}
+
+#decision-models .card-title:focus {
+  border-color: var(--accent);
+  background: var(--bg);
+  outline: none;
+}
+
+#decision-models .card-title::placeholder {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 #decision-models .card-actions {
   display: flex;
   gap: 8px;
   margin-left: auto;
+}
+
+/* 上下文窗口：常用档位用下拉框（始终列出全部档位），选「自定义」才露出数字输入框。
+   数字输入框不要原生上下微调按钮，右侧只留一个箭头。 */
+#decision-models .window-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#decision-models .window-field select,
+#decision-models .window-field input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+#decision-models input[data-dm-field="context_tokens"]::-webkit-outer-spin-button,
+#decision-models input[data-dm-field="context_tokens"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#decision-models input[data-dm-field="context_tokens"] {
+  -moz-appearance: textfield;
 }
 
 /* API Key：隐藏浏览器原生（失焦后不可靠）的明文切换按钮，改用下方的常驻按钮。 */

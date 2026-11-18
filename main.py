@@ -76,7 +76,12 @@ class AmbientChatPlugin(Star):
         self.account = BotAccountName(context)
         self.recall = LivingMemoryRecall(context)
         """LivingMemory 召回客户端；插件未安装时其所有调用 fail-open。"""
-        self.judge = IntentJudge(context, self.router, identity=self._identity)
+        self.judge = IntentJudge(
+            context,
+            self.router,
+            identity=self._identity,
+            settings=lambda: self.settings,
+        )
         self.delivery = Delivery(
             context,
             self.buffer,

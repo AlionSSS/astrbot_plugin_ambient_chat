@@ -6,6 +6,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
+from astrbot_plugin_ambient_chat.rules.models import DEFAULT_DECISION_CONTEXT_TOKENS
 from astrbot_plugin_ambient_chat.speech.intent import (
     DECISION_STATE_CHAR_BUDGET,
     MAX_PERSONA_CHARS,
@@ -25,9 +26,12 @@ def _cost(conversation: list[dict], persona: str) -> int:
     return sum(_entry_cost(entry) for entry in conversation) + len(persona)
 
 
-def test_budget_stays_inside_8k_even_at_one_token_per_char() -> None:
+def test_budget_stays_inside_window_even_at_one_token_per_char() -> None:
     """预算是按「1 字 ≈ 1 token」的最坏假设定的（ADR-0009）。"""
-    assert DECISION_STATE_CHAR_BUDGET + QUESTION_OVERHEAD_CHARS <= 8192
+    assert (
+        DECISION_STATE_CHAR_BUDGET + QUESTION_OVERHEAD_CHARS
+        <= DEFAULT_DECISION_CONTEXT_TOKENS
+    )
 
 
 def test_keeps_newest_messages_within_budget() -> None:

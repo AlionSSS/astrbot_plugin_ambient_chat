@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timezone
 from typing import Any
 
@@ -15,6 +16,35 @@ from .messages import (
     ChatMessage,
     shape_from_parts,
 )
+
+PLACEHOLDER_PATTERN = re.compile(r"^\[([A-Za-z]+)\]$")
+"""核心平台历史里的组件占位：``[Image]`` / ``[Record]`` / ``[Face]``……
+
+``PlatformMessageHistoryManager.insert_message_chain`` 把媒体与其它组件统一写成
+``{"type": "plain", "text": "[Image]"}``，读历史时若把它当正文，判定模型会以为
+对方「打了一行 [Image]」，这段占位还会顺着正文进入召回关键词。所以还原成组成
+单元，渲染与判定看到的才是「发了一张图」。
+"""
+
+PLACEHOLDER_KINDS: dict[str, str] = {
+    **{
+        name: kind
+        for name, kind in COMPONENT_KINDS.items()
+        if kind not in DECORATION_KINDS
+    },
+    "node": "forward",
+    "nodes": "forward",
+}
+"""占位里的组件名（小写）→ 条目 ``type``；``Node(s)`` 是合并转发。"""
+
+
+def _placeholder_segment(text: str) -> dict[str, Any] | None:
+    """``[Image]`` 这类纯占位还原成一个组成单元；不是占位时返回 ``None``。"""
+    match = PLACEHOLDER_PATTERN.fullmatch(text)
+    if match is None:
+        return None
+    kind = PLACEHOLDER_KINDS.get(match.group(1).casefold())
+    return {"type": kind} if kind else None
 
 
 async def load_group_history(
@@ -100,10 +130,14 @@ def _row_to_message(row: Any, bot_name: str = "") -> ChatMessage | None:
         if part_type in ("plain", "text"):
             text = str(part.get("text") or "").strip()
             if text:
-                texts.append(text)
-                if not text_seen:
-                    parts.append({"type": "text"})
-                    text_seen = True
+                placeholder = _placeholder_segment(text)
+                if placeholder is not None:
+                    parts.append(placeholder)
+                else:
+                    texts.append(text)
+                    if not text_seen:
+                        parts.append({"type": "text"})
+                        text_seen = True
             continue
         segment = _segment_for(part_type, part)
         if segment is not None:

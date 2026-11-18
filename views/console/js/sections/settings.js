@@ -79,6 +79,23 @@ function syncMemoryFields() {
   setGroupDisabled($('#memory-fields'), !enabled);
 }
 
+/** 新建卡片的默认窗口：与后端 `DEFAULT_DECISION_CONTEXT_TOKENS` 一致。 */
+const DEFAULT_DECISION_CONTEXT_TOKENS = 16384;
+
+/**
+ * 上下文窗口的常用档位。
+ *
+ * 不用原生 `<datalist>`：它会按输入框里已有的值过滤候选，填过 16384 之后就只看得到
+ * 一档，像是没有别的选项。下拉框则始终列出全部档位。
+ */
+const DECISION_WINDOW_PRESETS = [
+  { value: 8192, label: '8K' },
+  { value: 16384, label: '16K' },
+  { value: 32768, label: '32K' },
+  { value: 65536, label: '64K' },
+  { value: 131072, label: '128K' },
+];
+
 function blankDecisionModel() {
   return {
     id: '',
@@ -86,7 +103,37 @@ function blankDecisionModel() {
     base_url: '',
     model: '',
     api_key: '',
+    context_tokens: DEFAULT_DECISION_CONTEXT_TOKENS,
   };
+}
+
+/** 一条模型当前的窗口值：缺失或非法时按默认值算。 */
+function decisionWindowValue(model) {
+  const value = Number(model.context_tokens);
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_DECISION_CONTEXT_TOKENS;
+}
+
+/**
+ * 上下文窗口字段：命中常用档位时只显示下拉框（只带向下箭头），选「自定义…」才露出
+ * 数字输入框，两者写的是同一个 `context_tokens`。
+ */
+function renderWindowField(model, index) {
+  const value = decisionWindowValue(model);
+  const preset = DECISION_WINDOW_PRESETS.some((item) => item.value === value);
+  const options = DECISION_WINDOW_PRESETS.map(
+    (item) =>
+      `<option value="${item.value}"${item.value === value ? ' selected' : ''}>${item.label}</option>`,
+  ).join('');
+  return `<span class="window-field">
+    <select data-dm-index="${index}" data-dm-window="1" aria-label="上下文窗口预算">
+      ${options}
+      <option value="custom"${preset ? '' : ' selected'}>自定义…</option>
+    </select>
+    <input type="number" min="2048" max="200000" step="1024"
+      data-dm-index="${index}" data-dm-field="context_tokens"
+      value="${escapeHtml(value)}" class="${preset ? 'hidden' : ''}" /></span>`;
 }
 
 /**
@@ -100,7 +147,10 @@ function renderDecisionModels() {
     .map(
       (model, index) => `<div class="card">
       <div class="card-head">
-        <b>${escapeHtml(model.name || model.model || `决策模型 ${index + 1}`)}</b>
+        <input class="card-title" type="text" maxlength="40" data-dm-index="${index}"
+          data-dm-field="name" value="${escapeHtml(model.name)}"
+          placeholder="${escapeHtml(model.model || `决策模型 ${index + 1}`)}"
+          aria-label="决策模型名称" />
         <span class="card-actions">
           <button class="btn small ghost" data-test-decision-model="${index}" type="button"
             title="用一次请求同时测试 noul / choice / score">测试</button>
@@ -108,9 +158,6 @@ function renderDecisionModels() {
         </span>
       </div>
       <div class="grid">
-        <label class="field"><span>名称（可选）</span>
-          <input type="text" maxlength="40" data-dm-index="${index}" data-dm-field="name"
-            value="${escapeHtml(model.name)}" placeholder="例如：Jev决策" /></label>
         <label class="field"><span>模型 ID</span>
           <input type="text" maxlength="100" data-dm-index="${index}" data-dm-field="model"
             value="${escapeHtml(model.model)}" placeholder="jev-latest" /></label>
@@ -136,6 +183,8 @@ function renderDecisionModels() {
             </button>
           </span>
         </div>
+        <label class="field"><span>上下文窗口预算<em>2048~200000</em></span>
+          ${renderWindowField(model, index)}</label>
       </div>
       <div class="decision-test-result" data-dm-result="${index}"></div>
     </div>`,
@@ -178,8 +227,7 @@ function formatDecisionTest(test) {
     ? `，tokens ${result.usage.input_tokens}/${result.usage.output_tokens}`
     : '';
   return `<p class="hint">✅ 三种题型均通过（${Number(result.elapsed_ms) || 0} ms${usage}）</p>
-    <p class="hint">${lines.map((line) => escapeHtml(line)).join('　·　')}</p>
-    <p class="hint">${escapeHtml(result.endpoint || '')}</p>`;
+    <p class="hint">${lines.map((line) => escapeHtml(line)).join('　·　')}</p>`;
 }
 
 /** 只重绘该卡片的结果区，避免整块卡片重建导致输入框失焦。 */
@@ -393,9 +441,37 @@ function syncDecisionModelField(input) {
   model[field] = input.type === 'checkbox' ? input.checked : input.value;
 }
 
+/**
+ * 选中常用档位后写回 state 并收起数字输入框；选「自定义…」只露出输入框，不改
+ * 当前值，等用户自己填。
+ */
+function applyWindowPreset(select) {
+  const index = Number(select.dataset.dmIndex);
+  const model = state.decisionModels[index];
+  if (!model) return;
+  const input = select.parentElement?.querySelector(
+    '[data-dm-field="context_tokens"]',
+  );
+  if (select.value === 'custom') {
+    input?.classList.remove('hidden');
+    input?.focus();
+    return;
+  }
+  const value = Number(select.value);
+  model.context_tokens = value;
+  if (input) {
+    input.value = String(value);
+    input.classList.add('hidden');
+  }
+}
+
 for (const eventName of ['input', 'change']) {
   document.addEventListener(eventName, (event) => {
     if (!event.target.closest('#decision-models')) return;
+    if (event.target.dataset.dmWindow) {
+      applyWindowPreset(event.target);
+      return;
+    }
     syncDecisionModelField(event.target);
   });
 }

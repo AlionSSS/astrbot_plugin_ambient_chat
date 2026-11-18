@@ -33,7 +33,7 @@ from ..conversation.context_buffer import ContextBuffer
 from ..conversation.messages import SELF_NAME, ChatMessage, to_datetime
 from ..memory import render_memory_block
 from ..rules.models import Settings
-from .memory import DELIVERY_MEMORY_CHARS, recall_memories
+from .memory import delivery_memory_chars, recall_memories
 from .segments import is_blocked_platform, split
 
 if TYPE_CHECKING:
@@ -140,11 +140,13 @@ class Delivery:
         umo: str,
         messages: list[ChatMessage],
         memories: Sequence[MemoryItem] | None,
+        provider_id: str,
     ) -> str:
         """渲染长期记忆块；执行层已召回时直接复用，避免重复检索。
 
         ``memories`` 为 ``None`` 才自己召回（旧调用点、直接调用），为空列表表示
-        「召回过但没有命中」，不再打第二次请求。
+        「召回过但没有命中」，不再打第二次请求。字符预算跟着对话模型的窗口走：
+        换成大模型时自动放宽，读不到窗口才回退默认值。
         """
         if self._recall is None:
             return ""
@@ -156,7 +158,9 @@ class Delivery:
         if not items:
             return ""
         return render_memory_block(
-            items, max_chars=DELIVERY_MEMORY_CHARS, tz=self._tz()
+            items,
+            max_chars=delivery_memory_chars(self._context, provider_id),
+            tz=self._tz(),
         )
 
     # ------------------------------------------------------------------ 生成
@@ -250,7 +254,7 @@ class Delivery:
             target,
             self_name=self_name,
             group_name=self._buffer.session_name(umo),
-            memory_block=await self._memory_block(umo, messages, memories),
+            memory_block=await self._memory_block(umo, messages, memories, provider_id),
         )
         with self._buffer.borrow_images(
             messages,

@@ -810,25 +810,31 @@ async def test_global_disable_waits_for_send_then_clears_all_buffers(tmp_path):
 async def test_stopping_b_does_not_wait_for_scheduled_send_in_a():
     h = Harness()
     h.pause("sending", 0)
-    h.pause("generating", 1)
     await h.execution.reconcile()
 
-    # 用调度循环持有实际发送，确保配置重建也不等待另一绑定的收尾。
-    async def scheduled(binding, rule):
-        await h.execution.execute(binding.id, binding.targets[0])
+    # 调度循环只启动、不产生新执行：这里要验证的是「停止 B 与配置重建都不等
+    # A 的收尾」，不是调度器能不能挑中 B——让 rebuild 顺带触发别的执行，
+    # 只会把并发名额与挑选顺序搅进来，用例会变成对时序的赌博。
+    async def idle(binding, rule):
+        return None
 
-    h.scheduler._run_binding = scheduled
-    await h.scheduler.rebuild()
+    h.scheduler._run_binding = idle
+
+    a = await h.begin(0)
     await h.wait("sending", 0)
-    await h.wait("generating", 1)
     stop_a = asyncio.create_task(h.stop(0))
-    await asyncio.sleep(0)
+    # 等它真正挂到「在途发送」上，而不是只让出一次控制权：单次 sleep(0) 时
+    # stop(1) 可能先跑完 reconcile 并把 b0 的停用状态一起记账，导致 stop_a
+    # 看到「无差异」瞬间返回，断言随机失败。
+    done, _pending = await asyncio.wait({stop_a}, timeout=0.2)
+    assert not done, "停止 A 应等待在途发送"
     async with asyncio.timeout(1):
         await h.stop(1)
         await h.scheduler.rebuild()
     assert not stop_a.done()
     h.release("sending", 0)
     await stop_a
+    assert (await a).ok
     await h.scheduler.stop()
 
 

@@ -131,6 +131,39 @@ def strip_system_reminder(text: str) -> str:
     return SYSTEM_REMINDER_PATTERN.sub("", text)
 
 
+PLACEHOLDER_WORDS = tuple(
+    dict.fromkeys(
+        [
+            *COMPONENT_KINDS,
+            *PLACEHOLDERS.values(),
+            "node",
+            "nodes",
+            "json",
+            "unknown",
+        ]
+    )
+)
+"""会被上游写进正文的组件占位名：核心用组件类名（``[Image]``），部分适配器用
+中文（``[图片]``），两种都要认。"""
+
+PLACEHOLDER_PATTERN = re.compile(
+    r"\[(?:" + "|".join(re.escape(word) for word in PLACEHOLDER_WORDS) + r")\]",
+    re.IGNORECASE,
+)
+"""组件占位标记：``[Image]`` / ``[图片]`` / ``[Record]`` …，见 :func:`strip_placeholders`。"""
+
+
+def strip_placeholders(text: str) -> str:
+    """去掉正文里的组件占位，只留真正的文字。
+
+    占位表达的是「这里有个组件」，不是用户说过的话：混进召回关键词会稀释检索
+    语义，整条只有占位时更应当当作没有正文（调用方据此跳过该条）。
+    """
+    if not text:
+        return ""
+    return " ".join(PLACEHOLDER_PATTERN.sub(" ", text).split())
+
+
 def format_stamp(timestamp: float, tz: _tzinfo) -> str:
     """把 epoch 秒渲染成 ``2026-11-03 周二 22:20``；时间缺失（<=0）时给出可读占位。"""
     moment = to_datetime(timestamp, tz)

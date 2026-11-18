@@ -26,9 +26,14 @@ from ..conversation.messages import (
     ChatMessage,
     format_time,
 )
-from ..rules.models import Rule
+from ..rules.models import Rule, Settings
 from .decision import DecisionContentRejected, DecisionRouter, NoulPrompt
-from .memory import memory_entries
+from .memory import (
+    DECISION_STATE_CHAR_BUDGET,
+    decision_budget,
+    decision_window,
+    memory_entries,
+)
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
@@ -86,17 +91,9 @@ _HINT_TEXT = {
     MODE_DIRECT: HINT_DIRECT,
 }
 
-DECISION_STATE_CHAR_BUDGET = 7000
-"""判定请求里 ``state``（conversation 消息条目 + persona）的字符预算。
-
-``intern-decision-4b`` 的上下文是 8K。实测（书生端砚，中文群聊）真实请求的
-token/字符比约 **0.72**：3703 字符的请求体对应 2686 input tokens。按 ADR-0009
-最初的「1 字 ≈ 1 token」最坏假设，7000 字符 + questions（约 380 字符）仍低于
-8192；按实测比例则只用掉约 62% 的窗口（ADR-0009）。
-
-成本按条目序列化后的 JSON 文本计，key 与引号的开销已算在内。
-"""
-
+# 判定 state 的字符预算按决策模型窗口推导（ADR-0009），默认 8K 窗口约 6963 字；
+# 分配规则见 :func:`speech.memory.decision_budget`，``DECISION_STATE_CHAR_BUDGET``
+# 只是缺省值，实际每次判定都按「更多设置」里的窗口重算。
 MAX_PERSONA_CHARS = 2000
 """人格最多保留的字符数，超出截断尾部（保留开头的身份描述）。"""
 
@@ -146,11 +143,14 @@ class IntentJudge:
         router: DecisionRouter,
         *,
         identity: Callable[[str], Mapping[str, str]] | None = None,
+        settings: Callable[[], Settings] | None = None,
     ) -> None:
         self._context = context
         self._router = router
         self._identity = identity
         """机器人自身的署名信息；缺省时只发「我」，测试与旧调用方不必提供。"""
+        self._settings: Callable[[], Settings] = settings or Settings
+        """运行参数来源；缺省时用默认值（8K 窗口），测试与旧调用方不必提供。"""
 
     async def judge(
         self,
@@ -177,16 +177,29 @@ class IntentJudge:
         persona_prompt = await self.persona_prompt(umo) if rule.inject_persona else ""
         # 人格为空（未配置，或规则关闭了注入）时用中性占位，指令保持无条件。
         persona_prompt = persona_prompt or NEUTRAL_PERSONA_PROMPT
-        # 记忆条目要占 state 预算，先算出来再让对话让位：8K 上下文里
-        # 「对话 + 人格 + 记忆 + questions」是同一份额度。
-        memory_lines = memory_entries(memories or ())
-        # 决策模型上下文有限（如 intern-decision-4b 只有 8K），超了会直接报错，
-        # 因此在插件侧按字符预算裁剪：先砍最旧的对话，再压人格尾部。
+        # 预算跟着这条规则选中的决策模型的窗口走（ADR-0009）：窗口按模型各自
+        # 配置，换成 32K / 128K 的模型时判定能带更多对话与更长记忆。
+        # 记忆先算出来，再从同一份额度里让位。
+        budget = decision_budget(
+            decision_window(
+                self._context,
+                self._settings(),
+                rule.intent.decision_provider_id,
+            )
+        )
+        memory_lines = memory_entries(
+            memories or (),
+            entry_chars=budget.entry_chars,
+            max_chars=budget.memory_chars,
+        )
+        # 决策模型上下文有限，超了会直接报错，因此在插件侧按字符预算裁剪：
+        # 先砍最旧的对话，再压人格尾部。
         conversation, persona_prompt = _fit_conversation(
             messages,
             now.tzinfo or timezone.utc,
             persona_prompt,
             with_id=bool(target and target.is_group),
+            budget=budget.state_chars,
             reserve=sum(len(line) for line in memory_lines) + len(memory_lines),
         )
         if not conversation:
@@ -584,6 +597,7 @@ def _fit_conversation(
     *,
     with_id: bool = False,
     reserve: int = 0,
+    budget: int = DECISION_STATE_CHAR_BUDGET,
 ) -> tuple[list[dict[str, Any]], str]:
     """按字符预算裁剪对话与人格，返回 ``(消息条目, 人格)``。
 
@@ -592,16 +606,18 @@ def _fit_conversation(
     成本按序列化后的 JSON 长度估算，避免 key 与引号等语法开销被漏算。
 
     ``reserve`` 是同一份预算里已经被别的字段（长期记忆）占掉的字符数：记忆与对话
-    共用 8K 上下文，必须从剩余额度里先扣，不能叠加。
+    共用同一份上下文，必须从剩余额度里先扣，不能叠加。``budget`` 由决策模型的
+    窗口推导（:func:`speech.memory.decision_budget`），缺省按 8K 窗口。
     """
+    budget = max(MIN_CONVERSATION_CHARS, int(budget))
     persona = persona.strip()
     persona_limit = min(
         MAX_PERSONA_CHARS,
-        DECISION_STATE_CHAR_BUDGET - MIN_CONVERSATION_CHARS,
+        budget - MIN_CONVERSATION_CHARS,
     )
     if len(persona) > persona_limit:
         persona = _cut(persona, persona_limit)
-    remaining = DECISION_STATE_CHAR_BUDGET - len(persona) - max(0, reserve)
+    remaining = budget - len(persona) - max(0, reserve)
 
     entries = [_message_entry(message, tz, with_id=with_id) for message in messages]
     kept: list[dict[str, Any]] = []
@@ -619,7 +635,7 @@ def _fit_conversation(
     if len(kept) != len(entries):
         logger.debug(
             "[Ambient] 判定请求超出 %d 字符预算，对话 %d→%d 条，人格 %d 字符。",
-            DECISION_STATE_CHAR_BUDGET,
+            budget,
             len(entries),
             len(kept),
             len(persona),

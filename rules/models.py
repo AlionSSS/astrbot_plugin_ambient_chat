@@ -132,6 +132,15 @@ MAX_MEMORY_RECALL_K = 5
 MAX_MEMORY_RECALL_FANOUT = 5
 """群聊按最近几个人并联召回（仅 ``user`` 作用域有意义）。"""
 
+DEFAULT_DECISION_CONTEXT_TOKENS = 16384
+"""决策模型的默认上下文窗口：判定 state 的字符预算按它的 85% 推导（ADR-0009）。
+
+窗口按模型各自配置（自定义模型在「更多设置」里填，官方判断提供商读其
+``max_context_tokens``）；都读不到时用这个默认值，不需要换算成字符数。
+"""
+MIN_DECISION_CONTEXT_TOKENS = 2048
+MAX_DECISION_CONTEXT_TOKENS = 200000
+
 DEFAULT_MEMORY_RECALL_ENABLED = False
 """默认不接长期记忆：LivingMemory 可能没装，记忆内容也可能与当前语境无关。"""
 
@@ -165,6 +174,8 @@ class DecisionModel:
     base_url: str
     model: str
     api_key: str = ""
+    context_tokens: int = DEFAULT_DECISION_CONTEXT_TOKENS
+    """该模型的上下文窗口：判定 state 与记忆的字符预算按它推导（ADR-0009）。"""
 
     @property
     def ref(self) -> str:
@@ -178,6 +189,7 @@ class DecisionModel:
             "base_url": self.base_url,
             "model": self.model,
             "api_key": self.api_key,
+            "context_tokens": self.context_tokens,
         }
 
     @classmethod
@@ -210,6 +222,7 @@ class DecisionModel:
             base_url=base_url,
             model=model,
             api_key=str(raw.get("api_key") or "").strip(),
+            context_tokens=_parse_decision_context_tokens(raw.get("context_tokens")),
         )
 
 
@@ -887,6 +900,23 @@ def _parse_sender_ids(raw: Any) -> list[str]:
     if len(sender_ids) > MAX_BUFFER_IGNORED_SENDERS:
         raise RuleError(f"过滤的用户 ID 最多 {MAX_BUFFER_IGNORED_SENDERS} 个")
     return sender_ids
+
+
+def _parse_decision_context_tokens(raw: Any) -> int:
+    """解析单个决策模型的上下文窗口：留空取默认值，越界或非整数报错。"""
+    text = str(raw or "").strip()
+    if not text:
+        return DEFAULT_DECISION_CONTEXT_TOKENS
+    try:
+        tokens = int(text)
+    except (TypeError, ValueError) as exc:
+        raise RuleError("决策模型上下文窗口必须是整数") from exc
+    if not MIN_DECISION_CONTEXT_TOKENS <= tokens <= MAX_DECISION_CONTEXT_TOKENS:
+        raise RuleError(
+            "决策模型上下文窗口需在 "
+            f"{MIN_DECISION_CONTEXT_TOKENS}~{MAX_DECISION_CONTEXT_TOKENS} 之间"
+        )
+    return tokens
 
 
 def _parse_decision_models(raw: Any) -> list[DecisionModel]:

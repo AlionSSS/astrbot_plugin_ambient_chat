@@ -15,7 +15,6 @@ from astrbot_plugin_ambient_chat.rules.models import Rule, Settings
 from astrbot_plugin_ambient_chat.speech.delivery import Delivery, build_prompt
 from astrbot_plugin_ambient_chat.speech.intent import IntentJudge
 from astrbot_plugin_ambient_chat.speech.memory import (
-    DECISION_MEMORY_CHARS,
     memory_entries,
     recall_memories,
     recall_query,
@@ -75,9 +74,7 @@ def _buffer() -> ContextBuffer:
         UMO,
         ChatMessage("小明", "帮我带点特产", time.time(), sender_id="43"),
     )
-    buffer.append(
-        UMO, ChatMessage("我", "好呀", time.time(), is_bot=True)
-    )
+    buffer.append(UMO, ChatMessage("我", "好呀", time.time(), is_bot=True))
     return buffer
 
 
@@ -95,6 +92,22 @@ def test_recall_query_empty_when_only_bot_spoke() -> None:
     buffer.append(UMO, ChatMessage("我", "自言自语", time.time(), is_bot=True))
 
     assert recall_query(buffer.recent(UMO, 5)) == ""
+
+
+def test_recall_query_skips_placeholder_only_messages() -> None:
+    """``[Image]`` 这类占位不是说过的话：只有占位的消息不进关键词。"""
+    buffer = ContextBuffer(maxlen=5)
+    buffer.append(UMO, ChatMessage("J", "[Image]", time.time(), sender_id="42"))
+    buffer.append(UMO, ChatMessage("小明", "这图哪来的", time.time(), sender_id="43"))
+
+    assert recall_query(buffer.recent(UMO, 5)) == "这图哪来的"
+
+
+def test_recall_query_strips_inline_placeholders() -> None:
+    buffer = ContextBuffer(maxlen=5)
+    buffer.append(UMO, ChatMessage("J", "看这个 [图片]", time.time(), sender_id="42"))
+
+    assert recall_query(buffer.recent(UMO, 5)) == "看这个"
 
 
 @pytest.mark.asyncio
@@ -119,19 +132,39 @@ async def test_recall_memories_forwards_settings() -> None:
     assert recall.calls[0]["timeout"] == pytest.approx(3.0)
 
 
-def test_memory_entries_respects_entry_and_total_budget() -> None:
-    entries = memory_entries(
-        [_item("甲" * 300), _item("乙" * 300), _item("丙" * 300)],
-        entry_chars=100,
-    )
+def test_memory_entries_fills_budget_and_truncates_tail() -> None:
+    items = [
+        _item(name * 300, score=0.9 - index * 0.1)
+        for index, name in enumerate("甲乙丙丁戊")
+    ]
 
-    assert entries[0].endswith("…")
-    assert len(entries[0]) == 100
-    assert sum(len(entry) for entry in entries) <= DECISION_MEMORY_CHARS
+    entries = memory_entries(items, entry_chars=100, max_chars=250)
+
+    # 前两条按单条上限截断，第三条吃掉余量收尾：预算用尽而不是留空。
+    assert [len(entry) for entry in entries] == [100, 100, 50]
+    assert entries[-1].endswith("…")
+    assert sum(len(entry) for entry in entries) <= 250
+
+
+def test_memory_entries_orders_by_score_then_shorter() -> None:
+    items = [
+        _item("低分长句子" * 10, score=0.4),
+        _item("高分" * 5, score=0.9),
+        _item("同分短", score=0.4),
+    ]
+
+    entries = memory_entries(items, entry_chars=200, max_chars=600)
+
+    assert entries[0] == "高分" * 5
+    # 同分时短的在前：余量不足时先被截断的是长条目。
+    assert entries[1] == "同分短"
+    assert entries[2] == "低分长句子" * 10
 
 
 def test_memory_entries_dedupes_and_drops_blank() -> None:
-    assert memory_entries([_item("同一句"), _item(" 同一句 "), _item("  ")]) == ["同一句"]
+    assert memory_entries([_item("同一句"), _item(" 同一句 "), _item("  ")]) == [
+        "同一句"
+    ]
 
 
 @pytest.mark.asyncio
@@ -199,7 +232,7 @@ async def test_delivery_reuses_given_memories_without_recalling() -> None:
     )
 
     block = await delivery._memory_block(
-        UMO, _buffer().recent(UMO, 10), [_item("用户周五去上海出差")]
+        UMO, _buffer().recent(UMO, 10), [_item("用户周五去上海出差")], "p1"
     )
 
     assert "用户周五去上海出差" in block
@@ -217,7 +250,7 @@ async def test_delivery_empty_reused_memories_does_not_recall_again() -> None:
         recall=recall,  # type: ignore[arg-type]
     )
 
-    assert await delivery._memory_block(UMO, _buffer().recent(UMO, 10), []) == ""
+    assert await delivery._memory_block(UMO, _buffer().recent(UMO, 10), [], "p1") == ""
     assert recall.calls == []
 
 
@@ -231,7 +264,7 @@ async def test_delivery_recalls_when_not_given_memories() -> None:
         recall=recall,  # type: ignore[arg-type]
     )
 
-    block = await delivery._memory_block(UMO, _buffer().recent(UMO, 10), None)
+    block = await delivery._memory_block(UMO, _buffer().recent(UMO, 10), None, "p1")
 
     assert "用户周五去上海出差" in block
     assert len(recall.calls) == 1
