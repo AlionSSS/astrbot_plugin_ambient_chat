@@ -701,10 +701,10 @@ def _build_instructions(question: str) -> str:
     """
     if question == "interested":
         return (
-            "基于你的人设，结合 now 与每条消息的 time，判断："
+            "基于你的人设，结合 now 与每条消息的 time 以及 memory，判断："
             "你是否对当前会话内容感兴趣？或是否想自然地接一句话？"
         )
     return (
-        "基于你的人设，结合 now 与每条消息的 time，判断："
+        "基于你的人设，结合 now 与每条消息的 time 以及 memory，判断："
         "当前会话内容是否适合开启一个新话题？"
     )

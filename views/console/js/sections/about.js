@@ -56,6 +56,8 @@ export function renderAbout() {
   setText('#info-timezone', meta.timezone);
   setText('#info-path', meta.config_path);
   setText('#info-media-path', meta.media_path);
+  setText('#info-decision-log-path', meta.debug_paths?.decision);
+  setText('#info-chat-log-path', meta.debug_paths?.chat);
   setText('#info-schema', meta.schema_version === undefined ? DASH : `v${meta.schema_version}`);
   setText('#info-error', meta.load_error || '无');
   setText('#info-environment', environmentText(meta.environment));

@@ -17,7 +17,8 @@ from astrbot.api.web import error_response, json_response, request
 from .common import PLUGIN_NAME, parse_target, plugin_metadata
 from .conversation.messages import format_stamp
 from .rules.models import DecisionModel, RuleError
-from .speech.decision import probe_decision_model
+from .speech.decision import DECISION_DEBUG_DIRNAME, probe_decision_model
+from .speech.delivery import CHAT_DEBUG_DIRNAME
 from .speech.systemone_sdk import SystemOneError
 
 if TYPE_CHECKING:
@@ -181,6 +182,11 @@ class AmbientWebApi:
                 "timezone": str(self._plugin.timezone),
                 "config_path": snapshot["path"],
                 "media_path": str(self._plugin.buffer.media_root),
+                "debug_paths": {
+                    # 目录在真正写日志时才创建；关着开关也照样展示，方便用户自己去找。
+                    "decision": str(store.data_dir / DECISION_DEBUG_DIRNAME),
+                    "chat": str(store.data_dir / CHAT_DEBUG_DIRNAME),
+                },
                 "schema_version": snapshot["schema_version"],
                 "load_error": snapshot["load_error"],
                 "application": self._plugin.configuration.snapshot(),

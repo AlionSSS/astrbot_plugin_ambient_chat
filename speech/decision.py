@@ -52,6 +52,9 @@ DECISION_TOTAL_TIMEOUT = 15.0
 DECISION_MAX_RETRIES = 0
 """默认不重试：一次判断失败就放弃本次发言，避免连续失败时排队等待。"""
 
+DECISION_DEBUG_DIRNAME = "decision_debug"
+"""决策模型调试日志目录；控制台「运行信息」直接展示这个路径。"""
+
 NOUL_TRUE_FALLBACK = "该说法成立"
 NOUL_FALSE_FALLBACK = "该说法不成立"
 """noul 判定说明的兜底文案。书生端砚等平台要求 ``criteria`` 必带
@@ -202,7 +205,7 @@ def _debug_record(
         kind,
         request,
         response,
-        directory=store.data_dir / "decision_debug",
+        directory=store.data_dir / DECISION_DEBUG_DIRNAME,
         enabled=True,
         meta=meta,
         elapsed_ms=int((time.perf_counter() - started) * 1000),

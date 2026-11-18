@@ -1557,11 +1557,7 @@ input[type="password"]::-ms-clear {
 }
 
 
-/* 停止态不换底色（暗色下和页面背景几乎同色），只在左侧压一条灰线 */
-.status-card.is-stopped {
-  box-shadow: inset 3px 0 0 var(--line);
-}
-
+/* 停止态不加任何边线/底色，只弱化标题并靠右上角徽标区分 */
 .status-card.is-stopped .binding-name {
   color: var(--muted);
 }

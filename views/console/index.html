@@ -540,6 +540,7 @@
                     <li>「自主发言总开关」在 AstrBot 插件配置里（<code>enabled</code>）：关闭后只停调度，本页面与规则数据都保留。</li>
                     <li>「文件异常」显示配置读取失败的原因，正常时显示「无」。</li>
                     <li>「数据结构版本」是 settings.json 的格式版本；旧数据按缺省值兼容读取，下次保存时写回当前版本。</li>
+                    <li>「决策 / 对话日志路径」是「更多设置 → 调试」里两个开关开启后写日志的位置；开关关着时目录可能还不存在，各自最多保留最近 100 条、总量不超过 10 MiB。</li>
                     <li>「运行环境」是当前实际运行 AstrBot 与 Python 的版本，反馈问题时请一并附上。</li>
                   </ul>
                 </div>
@@ -552,8 +553,12 @@
               <dd id="info-timezone">-</dd>
               <dt>配置文件</dt>
               <dd id="info-path">-</dd>
-              <dt>图片缓存路径</dt>
+              <dt>媒体缓存路径</dt>
               <dd id="info-media-path">-</dd>
+              <dt>决策日志路径</dt>
+              <dd id="info-decision-log-path">-</dd>
+              <dt>对话日志路径</dt>
+              <dd id="info-chat-log-path">-</dd>
               <dt>数据结构版本</dt>
               <dd id="info-schema">-</dd>
               <dt>文件异常</dt>
@@ -561,7 +566,9 @@
               <dt>运行环境</dt>
               <dd id="info-environment">-</dd>
             </dl>
-            <p class="hint">配置路径、开关状态、数据结构版本与运行环境，只读。</p>
+            <p class="hint">
+              配置路径、媒体缓存路径、调试日志路径、开关状态、数据结构版本与运行环境，只读。
+            </p>
           </div>
 
           <div class="panel">
@@ -664,7 +671,7 @@
             <h2 class="step-head"><span class="step-no">2</span>有多个会话目标时的挑选策略</h2>
             <div class="grid">
               <label class="field">
-                <span>策略</span>
+                <span>挑选策略</span>
                 <select id="binding-selection-mode">
                   <option value="all">全部会话（按列表顺序依次触发）</option>
                   <option value="random">随机挑 N 个（按挑选顺序依次触发）</option>
