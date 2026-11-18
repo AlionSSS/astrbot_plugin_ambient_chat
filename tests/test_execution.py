@@ -5,6 +5,7 @@ import copy
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -66,10 +67,6 @@ class Harness:
         self.judged = []
         self.sent = []
         self.recorded = []
-        self.recall = None
-        """长期记忆客户端；默认关闭，需要时在用例里换成计数替身。"""
-        self.judged_memories = []
-        self.prepared_memories = []
         self.send_ok = True
         self.record_ok = True
         self.judge = SimpleNamespace(
@@ -118,14 +115,12 @@ class Harness:
         if (phase, umo) in self.gates:
             await self.gates[phase, umo].wait()
 
-    async def judgment(self, rule, umo, buffer, now, *, memories=None):
+    async def judgment(self, rule, umo, buffer, now):
         self.judged.append((umo, now))
-        self.judged_memories.append(memories)
         await self.stage("judging", umo)
         return IntentResult(True, reason="按概率放行（100%）")
 
-    async def prepare(self, rule, umo, hint, persona, now, *, memories=None):
-        self.prepared_memories.append(memories)
+    async def prepare(self, rule, umo, hint, persona, now):
         await self.stage("generating", umo)
         return PreparedSpeech(umo, "conversation", "hello")
 
@@ -167,52 +162,48 @@ async def wait_phase(h, phase, i=0):
             await asyncio.sleep(0)
 
 
-class _Recall:
-    """记录调用次数并返回固定记忆；用来验证「一次执行只召回一次」。"""
-
-    def __init__(self, items):
-        self.items = items
-        self.calls = []
-
-    async def recall(self, query, **kwargs):
-        self.calls.append({"query": query, **kwargs})
-        return list(self.items)
-
-
 @pytest.mark.asyncio
-async def test_decision_mode_recalls_once_before_judgment_and_reuses():
+@pytest.mark.parametrize("mode", [INTENT_DECISION, INTENT_DIRECT])
+@pytest.mark.parametrize("speak", [False, True])
+async def test_recall_only_happens_after_judgment_allows_speech(
+    mode: str, speak: bool
+) -> None:
     h = Harness()
-    h.recall = _Recall([MemoryItem(1, "用户周五去上海出差", 0.9)])
+    recall = SimpleNamespace(
+        recall=AsyncMock(return_value=[MemoryItem(1, "一条旧记忆", 0.9)])
+    )
+    context = SimpleNamespace(
+        get_current_chat_provider_id=AsyncMock(return_value="p1"),
+        conversation_manager=SimpleNamespace(
+            get_curr_conversation_id=AsyncMock(return_value="cid")
+        ),
+        llm_generate=AsyncMock(return_value=SimpleNamespace(completion_text="hello")),
+    )
+    h.delivery.prepare = Delivery(
+        context, h.buffer, settings=lambda: h.settings, recall=recall
+    ).prepare
     h.settings.memory_recall_enabled = True
-    h.store.get_rule("r0").intent.mode = INTENT_DECISION
+    h.store.get_rule("r0").intent.mode = mode
     h.buffer.append(h.umo(0), ChatMessage("Lion", "周五去上海", 0, sender_id="42"))
+
+    async def judge(*args: Any) -> IntentResult:
+        await h.judgment(*args)
+        return IntentResult(speak)
+
+    h.judge.judge = judge
+    h.pause("judging")
     await h.execution.reconcile()
 
-    outcome = await (await h.begin(0))
+    task = await h.begin(0)
+    await h.wait("judging")
+    recall.recall.assert_not_awaited()
+    h.release("judging")
+    outcome = await task
 
-    assert outcome.state == "sent"
-    assert len(h.recall.calls) == 1
-    assert h.judged_memories[0] == h.prepared_memories[0]
-    assert h.judged_memories[0][0].content == "用户周五去上海出差"
-
-
-@pytest.mark.asyncio
-async def test_probability_mode_defers_recall_to_generation():
-    """概率放行不读判定上下文：判定前不检索，交给投递侧在生成时取。"""
-    h = Harness()
-    h.recall = _Recall([MemoryItem(1, "用户周五去上海出差", 0.9)])
-    h.settings.memory_recall_enabled = True
-    h.store.get_rule("r0").intent.mode = INTENT_DIRECT
-    h.buffer.append(h.umo(0), ChatMessage("Lion", "周五去上海", 0, sender_id="42"))
-    await h.execution.reconcile()
-
-    outcome = await (await h.begin(0))
-
-    assert outcome.state == "sent"
-    assert h.recall.calls == []
-    assert h.judged_memories[0] is None
-    # None 表示「没取过」，投递侧据此自己召回；空列表才是「取过但没命中」。
-    assert h.prepared_memories[0] is None
+    assert outcome.state == ("sent" if speak else "skipped")
+    assert recall.recall.await_count == context.llm_generate.await_count == int(speak)
+    if speak:
+        assert "一条旧记忆" in context.llm_generate.await_args.kwargs["prompt"]
 
 
 @pytest.mark.asyncio
@@ -746,7 +737,7 @@ async def test_overlapping_changes_cannot_release_clients_before_judgment_exits(
     cancelled = asyncio.Event()
     release = asyncio.Event()
 
-    async def slow_cancel(rule, umo, buffer, now, *, memories=None):
+    async def slow_cancel(rule, umo, buffer, now):
         h.entered.setdefault(("judging", umo), asyncio.Event()).set()
         try:
             await asyncio.Event().wait()

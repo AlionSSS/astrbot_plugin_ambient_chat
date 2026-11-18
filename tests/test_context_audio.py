@@ -12,6 +12,8 @@ from astrbot_plugin_ambient_chat.conversation import context_buffer
 from astrbot_plugin_ambient_chat.conversation.context_buffer import ContextBuffer
 from astrbot_plugin_ambient_chat.conversation.media_store import MediaStore
 from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
+from astrbot_plugin_ambient_chat.memory import MemoryItem
+from astrbot_plugin_ambient_chat.rules.models import Settings
 from astrbot_plugin_ambient_chat.speech.delivery import Delivery
 
 UMO = "test:GroupMessage:1"
@@ -357,11 +359,20 @@ async def test_audio_retry_uses_original_image_labels(
 
     context = _MediaContext(["image", "audio"])
     context.llm_generate = generate
-    speech = await Delivery(context, buffer).prepare(
+    recall = SimpleNamespace(
+        recall=AsyncMock(return_value=[MemoryItem(1, "和图片相关的历史资料", 0.9)])
+    )
+    delivery = Delivery(
+        context,
+        buffer,
+        recall=recall,
+        settings=lambda: Settings(memory_recall_enabled=True),
+    )
+    speech = await delivery.prepare(
         SimpleNamespace(chat_provider_id="p1", context_turns=20),
         UMO,
         "接一句",
-        "",
+        "人设" * 2100,  # 8K 估算下，去掉语音前腾不出记忆预算
         datetime(2026, 11, 6, 12, tzinfo=timezone.utc),
     )
 
@@ -369,6 +380,9 @@ async def test_audio_retry_uses_original_image_labels(
     assert len(requests) == 2
     assert requests[1]["image_urls"] == requests[0]["image_urls"] == list(first.images)
     assert requests[1]["audio_urls"] is None
+    recall.recall.assert_awaited_once()
+    assert "<long_term_memory>" not in str(requests[0]["prompt"])
+    assert "和图片相关的历史资料" in str(requests[1]["prompt"])
     prompt = str(requests[1]["prompt"])
     assert "旧图 [图片 1] [语音]" in prompt
     assert "新图 [图片]" in prompt

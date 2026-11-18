@@ -422,7 +422,7 @@
                 <button class="help-icon" type="button" aria-label="关于长期记忆" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
-                    <li>判定「要不要说话」与生成正文前，先查这个会话相关的长期记忆；同一次发言只召回一次，判定结果与生成共用，不重复开销。</li>
+                    <li>通过判定、生成正文前才召回相关的长期记忆；同一次发言最多召回一次。长期记忆不影响「要不要说话」。</li>
                     <li>「群聊并联人数」仅在 LivingMemory 中记忆作用域模式为 user 时生效：群聊查最近几个发言者，私聊只查对端。</li>
                     <li>开启时会先检查 LivingMemory 是否可正常调用：未安装或未启用会弹窗提示并保持关闭。运行中偶发不可用（如仍在初始化）时自动跳过，不影响发言；本插件的召回<b>不计入记忆访问统计</b>。</li>
                   </ul>
@@ -430,7 +430,7 @@
               </span>
             </h2>
             <p class="hint">
-              接入 LivingMemory 插件，判定与生成前先召回该会话的长期记忆。
+              接入 LivingMemory 插件，放行后召回长期记忆供生成参考。
             </p>
             <div class="setting-line">
               <label class="switch">
@@ -458,7 +458,7 @@
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
                     <li>自定义 SystemOne 兼容端点，供规则第 3 步「发言意向」选择，与 AstrBot 官方判断提供商并列显示。</li>
-                    <li>每个模型各自配置「上下文窗口预算」，决定判定能带多少对话与记忆；官方判断提供商读它在 AstrBot 里声明的窗口。</li>
+                    <li>每个模型各自配置「上下文窗口预算」，决定判定能带多少近期对话；官方判断提供商读它在 AstrBot 里声明的窗口。</li>
                     <li>本插件会自动传入 criteria，用于更合理的决策。同时兼容书生端砚这类要求 criteria 判定标准必填的平台。</li>
                   </ul>
                 </div>

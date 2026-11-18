@@ -27,19 +27,17 @@ from ..conversation.messages import (
     format_time,
 )
 from ..rules.models import Rule, Settings
-from .decision import DecisionContentRejected, DecisionRouter, NoulPrompt
-from .memory import (
+from .decision import (
     DECISION_STATE_CHAR_BUDGET,
-    MemoryRecall,
-    decision_budget,
+    DecisionContentRejected,
+    DecisionRouter,
+    NoulPrompt,
+    decision_state_chars,
     decision_window,
-    memory_entries,
 )
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
-
-    from ..memory import MemoryItem
 
 MODE_CONTINUE = "continue"
 MODE_NEW_TOPIC = "new_topic"
@@ -93,7 +91,7 @@ _HINT_TEXT = {
 }
 
 # 判定 state 的字符预算按决策模型窗口推导（ADR-0009），默认 16K 窗口约 13926 字；
-# 分配规则见 :func:`speech.memory.decision_budget`，``DECISION_STATE_CHAR_BUDGET``
+# 分配规则见 :func:`speech.decision.decision_state_chars`，``DECISION_STATE_CHAR_BUDGET``
 # 只是缺省值，实际每次判定都按「更多设置」里的窗口重算。
 MAX_PERSONA_CHARS = 2000
 """人格最多保留的字符数，超出截断尾部（保留开头的身份描述）。"""
@@ -159,16 +157,8 @@ class IntentJudge:
         umo: str,
         buffer: ContextBuffer,
         now: datetime,
-        *,
-        memories: MemoryRecall | Sequence[MemoryItem] | None = None,
     ) -> IntentResult:
-        """判定这次要不要发言。
-
-        ``memories`` 由执行层在拦截之后召回一次，判定与生成共用（ADR-0013）；
-        ``None`` 表示调用方没有召回（旧调用点），此时只是不下发记忆，不影响判定。
-        传入 :class:`~.memory.MemoryRecall` 时，查询词与完整召回结果一并写进决策
-        调试日志，便于区分「没查到」与「查到了但被预算裁掉」。
-        """
+        """只用当下的会话语境判定要不要发言，不召回长期记忆。"""
         if rule.intent.mode != INTENT_DECISION:
             return self._by_probability(rule.intent.pass_probability)
 
@@ -181,20 +171,13 @@ class IntentJudge:
         # 人格为空（未配置，或规则关闭了注入）时用中性占位，指令保持无条件。
         persona_prompt = persona_prompt or NEUTRAL_PERSONA_PROMPT
         # 预算跟着这条规则选中的决策模型的窗口走（ADR-0009）：窗口按模型各自
-        # 配置，换成 32K / 128K 的模型时判定能带更多对话与更长记忆。
-        # 记忆先算出来，再从同一份额度里让位。
-        budget = decision_budget(
+        # 配置，换成更大的窗口时判定能带更多近期对话。
+        budget = decision_state_chars(
             decision_window(
                 self._context,
                 self._settings(),
                 rule.intent.decision_provider_id,
             )
-        )
-        recalled = memories.items if isinstance(memories, MemoryRecall) else memories
-        memory_lines = memory_entries(
-            recalled or (),
-            entry_chars=budget.entry_chars,
-            max_chars=budget.memory_chars,
         )
         # 决策模型上下文有限，超了会直接报错，因此在插件侧按字符预算裁剪：
         # 先砍最旧的对话，再压人格尾部。
@@ -203,8 +186,7 @@ class IntentJudge:
             now.tzinfo or timezone.utc,
             persona_prompt,
             with_id=bool(target and target.is_group),
-            budget=budget.state_chars,
-            reserve=sum(len(line) for line in memory_lines) + len(memory_lines),
+            budget=budget,
         )
         if not conversation:
             return IntentResult(False, MODE_CONTINUE, "上下文为空")
@@ -235,23 +217,11 @@ class IntentJudge:
         state["now"] = _format_now(now)
         state["scene"] = await self._scene(umo, messages, buffer)
         state["conversation"] = conversation
-        # 记忆是「以前提过的事」，用来判断「现在接话是否有话可说」；
-        # 空列表不下发该键，避免给判定模型一个空壳字段。
-        if memory_lines:
-            state["memory"] = memory_lines
-
         try:
             probabilities = await self._router.probabilities(
                 rule.intent.decision_provider_id or None,
                 prompts,
                 state,
-                # 记忆本身只写进 state，调试日志再补一份「拿什么查的、查回了什么」：
-                # state 里只剩裁好的条目，事后无法判断是没命中还是被预算裁掉。
-                debug_meta=(
-                    {"memory_recall": memories.debug_payload(now.tzinfo)}
-                    if isinstance(memories, MemoryRecall)
-                    else None
-                ),
             )
         except DecisionContentRejected as exc:
             # 请求格式没问题，是内容被平台判为敏感：页面要提示改内容，而不是改配置。
@@ -607,7 +577,6 @@ def _fit_conversation(
     persona: str,
     *,
     with_id: bool = False,
-    reserve: int = 0,
     budget: int = DECISION_STATE_CHAR_BUDGET,
 ) -> tuple[list[dict[str, Any]], str]:
     """按字符预算裁剪对话与人格，返回 ``(消息条目, 人格)``。
@@ -616,9 +585,7 @@ def _fit_conversation(
     条目（超出时丢最旧的整条）；单条消息仍放不下就只截正文，结构字段不动。
     成本按序列化后的 JSON 长度估算，避免 key 与引号等语法开销被漏算。
 
-    ``reserve`` 是同一份预算里已经被别的字段（长期记忆）占掉的字符数：记忆与对话
-    共用同一份上下文，必须从剩余额度里先扣，不能叠加。``budget`` 由决策模型的
-    窗口推导（:func:`speech.memory.decision_budget`），缺省按 16K 窗口。
+    预算按模型窗口推导（:func:`speech.decision.decision_state_chars`），缺省按 16K 窗口。
     """
     budget = max(MIN_CONVERSATION_CHARS, int(budget))
     persona = persona.strip()
@@ -628,7 +595,7 @@ def _fit_conversation(
     )
     if len(persona) > persona_limit:
         persona = _cut(persona, persona_limit)
-    remaining = budget - len(persona) - max(0, reserve)
+    remaining = budget - len(persona)
 
     entries = [_message_entry(message, tz, with_id=with_id) for message in messages]
     kept: list[dict[str, Any]] = []
@@ -712,10 +679,10 @@ def _build_instructions(question: str) -> str:
     """
     if question == "interested":
         return (
-            "基于你的人设，结合 now 与每条消息的 time 以及 memory，判断："
+            "基于你的人设，结合 now 与近期对话中每条消息的 time，判断："
             "你是否对当前会话内容感兴趣？或是否想自然地接一句话？"
         )
     return (
-        "基于你的人设，结合 now 与每条消息的 time 以及 memory，判断："
+        "基于你的人设，结合 now 与近期对话中每条消息的 time，判断："
         "当前会话内容是否适合开启一个新话题？"
     )

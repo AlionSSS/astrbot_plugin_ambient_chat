@@ -175,7 +175,7 @@ class DecisionModel:
     model: str
     api_key: str = ""
     context_tokens: int = DEFAULT_DECISION_CONTEXT_TOKENS
-    """该模型的上下文窗口：判定 state 与记忆的字符预算按它推导（ADR-0009）。"""
+    """该模型的上下文窗口：判定 state 的字符预算按它推导（ADR-0009）。"""
 
     @property
     def ref(self) -> str:
@@ -262,7 +262,7 @@ class Settings:
     chat_debug_enabled: bool = False
     """是否记录完整对话模型请求与响应；默认关闭，独立目录、同样的轮转规则。"""
     memory_recall_enabled: bool = DEFAULT_MEMORY_RECALL_ENABLED
-    """是否在判定与生成前召回 LivingMemory 的长期记忆（ADR-0013）。"""
+    """是否在放行后、生成前召回 LivingMemory 的长期记忆（ADR-0013）。"""
     memory_recall_k: int = DEFAULT_MEMORY_RECALL_K
     """一次召回几条记忆。"""
     memory_recall_fanout: int = DEFAULT_MEMORY_RECALL_FANOUT

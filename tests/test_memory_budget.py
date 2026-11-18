@@ -1,4 +1,4 @@
-"""预算随模型窗口缩放：判定 state、记忆条目与生成侧记忆块。"""
+"""判定 state 预算与对话模型剩余空间内的记忆预算。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 import pytest
 from astrbot.core.provider.entities import ProviderType
 from astrbot_plugin_ambient_chat.conversation.messages import ChatMessage
-from astrbot_plugin_ambient_chat.memory.fit import ENTRY_SHARE
 from astrbot_plugin_ambient_chat.rules.models import (
     DEFAULT_DECISION_CONTEXT_TOKENS,
     DecisionModel,
@@ -18,13 +17,15 @@ from astrbot_plugin_ambient_chat.rules.models import (
     Settings,
 )
 from astrbot_plugin_ambient_chat.speech.intent import _entry_cost, _fit_conversation
-from astrbot_plugin_ambient_chat.speech.memory import (
-    DECISION_MEMORY_CHARS,
+from astrbot_plugin_ambient_chat.speech.decision import (
     DECISION_STATE_CHAR_BUDGET,
-    DELIVERY_MEMORY_CHARS,
-    decision_budget,
+    decision_state_chars,
     decision_window,
+)
+from astrbot_plugin_ambient_chat.speech.memory import (
+    DELIVERY_MEMORY_CHARS,
     delivery_memory_chars,
+    provider_context_tokens,
 )
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -53,46 +54,13 @@ class _Context:
         return self._provider
 
 
-def test_default_window_budget() -> None:
-    """默认 16K 窗口下，预算按 ADR-0009 的比例推导。"""
-    assert DECISION_STATE_CHAR_BUDGET == int(16_384 * 0.85)
-    assert DECISION_MEMORY_CHARS == int(DECISION_STATE_CHAR_BUDGET * 0.06)
-
-    budget = decision_budget()
-
-    assert budget.state_chars == DECISION_STATE_CHAR_BUDGET
-    assert budget.memory_chars == DECISION_MEMORY_CHARS
-    assert budget.entry_chars == int(DECISION_MEMORY_CHARS * ENTRY_SHARE)
-
-
-def test_budget_scales_with_window() -> None:
-    budget = decision_budget(32768)
-
-    assert budget.state_chars == int(32768 * 0.85)
-    assert budget.memory_chars > DECISION_MEMORY_CHARS
-    assert budget.state_chars > DECISION_STATE_CHAR_BUDGET
-
-
-def test_budget_is_capped_at_large_windows() -> None:
-    budget = decision_budget(200000)
-
-    assert budget.state_chars == 48_000
-    assert budget.memory_chars == 2_000
-
-
-@pytest.mark.parametrize("tokens", [2048, 8192])
-def test_budget_does_not_round_up_small_declared_windows(tokens: int) -> None:
-    assert decision_budget(tokens).state_chars == int(tokens * 0.85)
-
-
-def test_entry_cap_is_a_share_of_total_budget() -> None:
-    """单条上限按总预算推导：窗口变大时同步放宽，不按条数摊薄。"""
-    small = decision_budget()
-    large = decision_budget(32768)
-
-    assert small.entry_chars == int(small.memory_chars * ENTRY_SHARE)
-    assert large.entry_chars == int(large.memory_chars * ENTRY_SHARE)
-    assert large.entry_chars > small.entry_chars
+@pytest.mark.parametrize(
+    "tokens, expected",
+    [(None, 13926), (2048, 1740), (8192, 6963), (32768, 27852), (200000, 48000)],
+)
+def test_decision_budget_scales_and_caps(tokens: int | None, expected: int) -> None:
+    assert decision_state_chars(tokens) == expected
+    assert decision_state_chars() == DECISION_STATE_CHAR_BUDGET
 
 
 def test_bigger_window_keeps_more_conversation() -> None:
@@ -196,13 +164,20 @@ def test_decision_window_reads_the_selected_model() -> None:
     assert decision_window(None, settings, "dp") == DEFAULT_DECISION_CONTEXT_TOKENS
 
 
-@pytest.mark.parametrize("window", [8192, 16384, 65536, 131072])
-def test_delivery_budget_scales_with_window_without_cap(window: int) -> None:
-    """生成侧只跟着窗口等比放大：条数上限已经约束了总量，封顶只会让大窗口空转。"""
-    chars = delivery_memory_chars(_Context(_Provider(tokens=window)), "p1")
+@pytest.mark.parametrize(
+    "window, expected", [(4096, 300), (8192, 600), (16384, 1200), (65536, 1800)]
+)
+def test_delivery_budget_scales_with_window_up_to_cap(
+    window: int, expected: int
+) -> None:
+    assert delivery_memory_chars(window, used_chars=1000) == expected
 
-    assert chars == int(DELIVERY_MEMORY_CHARS * window / 8192)
-    assert chars >= DELIVERY_MEMORY_CHARS
+
+def test_delivery_budget_only_uses_request_headroom() -> None:
+    assert delivery_memory_chars(8192, used_chars=6800) == 163
+    assert delivery_memory_chars(8192, used_chars=6000, images=1) == 0
+    assert delivery_memory_chars(8192, used_chars=5000, audios=1) == 0
+    assert delivery_memory_chars(8192, used_chars=7000) == 0
 
 
 @pytest.mark.parametrize(
@@ -214,10 +189,7 @@ def test_delivery_budget_scales_with_window_without_cap(window: int) -> None:
     ],
 )
 def test_delivery_budget_falls_back_without_window(context: _Context) -> None:
-    assert delivery_memory_chars(context, "p1") == DELIVERY_MEMORY_CHARS
-
-
-def test_delivery_budget_without_provider_id_falls_back() -> None:
-    assert delivery_memory_chars(_Context(_Provider(tokens=65536)), "") == (
-        DELIVERY_MEMORY_CHARS
-    )
+    window = provider_context_tokens(context, "p1")
+    assert window == 0
+    assert delivery_memory_chars(window, used_chars=1000) == DELIVERY_MEMORY_CHARS
+    assert delivery_memory_chars(window, used_chars=6800) == 163

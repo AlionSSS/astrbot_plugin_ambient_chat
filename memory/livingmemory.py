@@ -96,6 +96,8 @@ class MemoryItem:
     """写入时间（epoch 秒）；解析不出来时为 ``None``，渲染时不编造时间。"""
     session_id: str | None = None
     persona_id: str | None = None
+    is_recent_filler: bool = False
+    """仅因近期而补位，不代表命中了当前查询。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,6 +716,7 @@ def _to_item(result: Any) -> MemoryItem | None:
         if disclosed not in {"true", "1", "yes", "on"}:
             return None
     importance = _as_float(metadata.get("importance"))
+    breakdown = getattr(result, "score_breakdown", None)
     return MemoryItem(
         memory_id=_as_int(getattr(result, "doc_id", None)),
         content=content,
@@ -722,6 +725,7 @@ def _to_item(result: Any) -> MemoryItem | None:
         created_at=_as_timestamp(metadata.get("create_time")),
         session_id=_as_text(metadata.get("session_id")),
         persona_id=_as_text(metadata.get("persona_id")),
+        is_recent_filler=isinstance(breakdown, dict) and "recent_memory" in breakdown,
     )
 
 

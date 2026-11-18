@@ -20,8 +20,14 @@ from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 from astrbot.api.provider import DecisionBooleanQuestion, DecisionError
+from astrbot.core.provider.entities import ProviderType
 
-from ..rules.models import CUSTOM_DECISION_PREFIX, DecisionModel
+from ..rules.models import (
+    CUSTOM_DECISION_PREFIX,
+    DEFAULT_DECISION_CONTEXT_TOKENS,
+    DecisionModel,
+    Settings,
+)
 from ..rules.store import RuleStore
 from .debug_log import write_debug_record
 from .systemone_sdk import (
@@ -37,6 +43,68 @@ from .systemone_sdk import (
     noul,
     score,
 )
+
+DECISION_STATE_RATIO = 0.85
+DECISION_STATE_HARD_MAX_CHARS = 48_000
+DECISION_STATE_CHAR_BUDGET = int(DEFAULT_DECISION_CONTEXT_TOKENS * DECISION_STATE_RATIO)
+
+
+def decision_state_chars(tokens: int | None = None) -> int:
+    """判定 state 的字符预算；不抬高宿主声明的较小窗口。"""
+    context_tokens = _positive_int(tokens, DEFAULT_DECISION_CONTEXT_TOKENS)
+    return min(
+        int(context_tokens * DECISION_STATE_RATIO), DECISION_STATE_HARD_MAX_CHARS
+    )
+
+
+def decision_window(context: Any, settings: Settings, ref: str) -> int:
+    """规则引用的决策模型声明的上下文窗口。
+
+    窗口按模型各自配置，没有全局开关：
+
+    - ``custom:<id>``：读「更多设置」里该模型自己填的 ``context_tokens``；
+    - 官方判断提供商：读 AstrBot 供应商配置里的 ``max_context_tokens``，与对话侧
+      同一个字段；
+    - 引用为空时读取核心当前选择的默认判断提供商；
+    - 都读不到时用 :data:`DEFAULT_DECISION_CONTEXT_TOKENS`，判定照常进行。
+    """
+    cleaned = (ref or "").strip()
+    if cleaned.startswith(CUSTOM_DECISION_PREFIX):
+        model_id = cleaned[len(CUSTOM_DECISION_PREFIX) :]
+        for model in getattr(settings, "decision_models", ()) or ():
+            if getattr(model, "id", "") == model_id:
+                return _positive_int(
+                    getattr(model, "context_tokens", None),
+                    DEFAULT_DECISION_CONTEXT_TOKENS,
+                )
+        return DEFAULT_DECISION_CONTEXT_TOKENS
+    return (
+        _official_decision_window(context, cleaned) or DEFAULT_DECISION_CONTEXT_TOKENS
+    )
+
+
+def _official_decision_window(context: Any, provider_id: str) -> int:
+    """官方判断提供商声明的窗口；未声明或读不到时返回 0。"""
+    manager = getattr(context, "provider_manager", None)
+    try:
+        if provider_id:
+            provider = context.get_provider_by_id(provider_id)
+        else:
+            # 与核心 DecisionService 使用同一套默认选择（无 umo 时同步和异步入口等价）。
+            provider = manager.get_using_provider(ProviderType.DECISION)
+        config = getattr(provider, "provider_config", None) or {}
+        return _positive_int(config.get("max_context_tokens"), 0)
+    except Exception:  # noqa: BLE001 - 读不到窗口不影响判定
+        return 0
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
 
 if TYPE_CHECKING:
     import httpx

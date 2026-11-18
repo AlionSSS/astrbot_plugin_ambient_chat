@@ -1,8 +1,6 @@
 """召回结果的装填规则：相关度优先，在字符预算内尽量装完整的记忆。
 
-判定侧（``state.memory``）与生成侧（``<long_term_memory>`` 块）共用这一套规则：
-同一次召回在两个消费者里必须看到同一批条目、同一段截断位置，否则会出现「判定
-说有话可说、生成时那条理由已经被砍掉」的漂移（ADR-0013）。
+用于生成侧的 ``<long_term_memory>`` 块（ADR-0013）。
 
 三条规则：
 
@@ -25,7 +23,7 @@ ENTRY_SHARE = 0.6
 """单条记忆最多占总预算的比例。"""
 
 TAIL_MIN_CHARS = 40
-"""收尾截断的最小长度：再短就只剩半句话，不如把余量空着。"""
+"""收尾截断的最小长度：再短就只剩半句话，留给后面更短的完整条目。"""
 
 ELLIPSIS = "…"
 
@@ -82,10 +80,10 @@ def fit_memories(
         extra = max(0, int(cost(item)))
         room = min(cap, left - extra)
         if room <= 0:
-            break
+            continue
         if len(text) > room:
             if room < tail:
-                break
+                continue
             text = truncate(text, room)
         fitted.append((item, text))
         left -= extra + len(text)

@@ -11,9 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 
-from ..common import INTENT_DECISION
 from ..speech.delivery import PreparedSpeech
-from ..speech.memory import recall_memories
 
 if TYPE_CHECKING:
     from ..main import AmbientChatPlugin
@@ -308,22 +306,7 @@ class SpeechExecution:
         blocked = plugin.blockers.check(rule, umo, now)
         if blocked.blocked:
             return SpeechResult("skipped", blocked.reason)
-        # 记忆只在真正用得上时才取（ADR-0013）：决策模型要在判定前读语境，所以这里
-        # 取一次、判定与生成共用；概率放行不读判定上下文，判定前就不必检索——留给
-        # 生成侧自己取（``Delivery`` 的 ``memories=None`` 兜底），被拒的那次零开销。
-        memories = (
-            await recall_memories(
-                plugin.recall,
-                plugin.settings,
-                umo,
-                plugin.buffer.recent(umo, rule.context_turns),
-            )
-            if rule.intent.mode == INTENT_DECISION
-            else None
-        )
-        intent = await plugin.judge.judge(
-            rule, umo, plugin.buffer, now, memories=memories
-        )
+        intent = await plugin.judge.judge(rule, umo, plugin.buffer, now)
         # 判定一出就记账（ADR-0012）：之后的拦截、生成失败都不改变「有多想说话」这个事实，
         # 记账也不该等发送结果，否则关注度会退化成「发送成功率」。份量按新增内容折算
         # （ADR-0012）：静默会话每次判定的还是同一段内容，不该按整份证据再记一次。
@@ -346,7 +329,6 @@ class SpeechExecution:
             intent.hint,
             persona,
             datetime.now(plugin.timezone),
-            memories=memories,
         )
         if speech is None:
             return SpeechResult("skipped", "无可投递内容：会话不可用或生成失败")
