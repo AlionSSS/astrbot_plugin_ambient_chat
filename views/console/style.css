@@ -2006,6 +2006,23 @@ input[type="password"]::-ms-clear {
   font-size: 12px;
 }
 
+/* 简介、作者这类自然语言读起来不该是等宽字体；路径、版本号与 ID 仍用上面的等宽 */
+.kv-text dd {
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.kv dd a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.kv dd a:hover {
+  text-decoration: underline;
+}
+
 /* ------------------------------------------------------------------ 确认框 */
 .dialog {
   position: fixed;

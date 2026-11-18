@@ -132,7 +132,7 @@ export function renderRunBadge() {
   if (broken) {
     badge.textContent = state.meta?.load_error ? '配置异常' : '应用失败';
     badge.title = state.meta?.load_error
-      ? '配置文件加载失败，调度已停止；详情见「更多设置 → 运行信息」。'
+      ? '配置文件加载失败，调度已停止；详情见「插件信息 → 运行信息」。'
       : '配置已保存，运行应用失败；请点击页面上方的「重新应用」。';
     return;
   }

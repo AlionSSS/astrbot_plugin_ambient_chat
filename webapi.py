@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
+import platform
 from typing import TYPE_CHECKING, Any
 
+from astrbot import __version__ as astrbot_version
 from astrbot.api import logger
 from astrbot.api.provider import DecisionError
 from astrbot.api.web import error_response, json_response, request
 
-from .common import PLUGIN_NAME, parse_target
+from .common import PLUGIN_NAME, parse_target, plugin_metadata
 from .conversation.messages import format_stamp
 from .rules.models import DecisionModel, RuleError
 from .speech.decision import probe_decision_model
@@ -170,7 +172,11 @@ class AmbientWebApi:
 
         return json_response(
             {
-                "plugin_name": PLUGIN_NAME,
+                "plugin": self._plugin_info(),
+                "environment": {
+                    "astrbot_version": astrbot_version,
+                    "python_version": platform.python_version(),
+                },
                 "enabled": self._plugin.is_enabled(),
                 "timezone": str(self._plugin.timezone),
                 "config_path": snapshot["path"],
@@ -520,6 +526,31 @@ class AmbientWebApi:
         return json_response({"result": result})
 
     # ------------------------------------------------------------------ 辅助
+    @staticmethod
+    def _plugin_info() -> dict[str, Any]:
+        """控制台「插件信息」：来自插件自带的 metadata.yaml，缺字段回退到注册名。"""
+        meta = plugin_metadata()
+
+        def text_of(key: str) -> str:
+            value = meta.get(key)
+            return str(value).strip() if value is not None else ""
+
+        def list_of(key: str) -> list[str]:
+            value = meta.get(key)
+            return [str(item) for item in value] if isinstance(value, list) else []
+
+        return {
+            "name": text_of("name") or PLUGIN_NAME,
+            "display_name": text_of("display_name"),
+            "version": text_of("version"),
+            "author": text_of("author"),
+            "desc": text_of("desc"),
+            "repo": text_of("repo"),
+            "support_platforms": list_of("support_platforms"),
+            "tags": list_of("tags"),
+            "astrbot_version": text_of("astrbot_version"),
+        }
+
     async def _platforms(self) -> list[dict[str, Any]]:
         online = await self._plugin.live_platform_status()
         result: list[dict[str, Any]] = []

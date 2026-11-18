@@ -1,4 +1,4 @@
-/** 更多设置页：运行参数、自定义决策模型与运行信息。 */
+/** 更多设置页：运行参数与自定义决策模型。 */
 import { apiGet, apiPost } from '../api.js';
 import { finishSaved } from '../shell.js';
 import { on, state } from '../store.js';
@@ -37,12 +37,6 @@ export function renderSettings() {
   state.decisionModels = clone(settings.decision_models || []);
   state.decisionTestResults = {};
   renderDecisionModels();
-  $('#info-enabled').textContent = state.meta.enabled ? '已开启（调度运行中）' : '已关闭（仅暂停调度）';
-  $('#info-timezone').textContent = state.meta.timezone || '-';
-  $('#info-path').textContent = state.meta.config_path || '-';
-  $('#info-media-path').textContent = state.meta.media_path || '-';
-  $('#info-schema').textContent = `v${state.meta.schema_version ?? '-'}`;
-  $('#info-error').textContent = state.meta.load_error || '无';
 }
 
 /**

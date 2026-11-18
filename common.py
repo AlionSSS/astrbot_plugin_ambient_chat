@@ -4,10 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import yaml
 
 PLUGIN_NAME = "astrbot_plugin_ambient_chat"
 """插件唯一识别名，同时用于 Web API 路由前缀与数据目录名。"""
+
+
+@lru_cache(maxsize=1)
+def plugin_metadata() -> dict[str, Any]:
+    """读取插件目录下的 ``metadata.yaml``。
+
+    控制台「插件信息」要展示版本、作者、仓库这些随发版变化的字段，直接从文件读可以
+    避免再抄一份常量（发版时容易漏改一处）。文件缺失或格式错误时返回空字典，
+    页面按缺省值展示，不影响其它功能。
+    """
+    path = Path(__file__).resolve().parent / "metadata.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
 
 AMBIENT_HINT_PREFIX = "（此刻没有人点你"
 """自主发言提示语的开头。

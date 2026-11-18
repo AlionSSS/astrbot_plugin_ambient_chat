@@ -29,6 +29,9 @@
           <button class="nav-item" data-section="settings" type="button">
             <span>更多设置</span>
           </button>
+          <button class="nav-item" data-section="about" type="button">
+            <span>插件信息</span>
+          </button>
         </nav>
         <div class="sidebar-foot">
           <span id="run-badge" class="badge">加载中…</span>
@@ -278,7 +281,7 @@
                     <li>这里的修改点底部<b>「保存设置」</b>才落盘，保存后立即生效，不必重启。</li>
                     <li>带开关的小节（分段拟人发言、媒体缓存、长期记忆）关掉时字段不可改，但取值不会丢失。</li>
                     <li>「决策模型」与规则第 3 步「发言意向」共用同一份列表。</li>
-                    <li>「运行信息」是只读的，数据来自 AstrBot 与插件配置文件。</li>
+                    <li>插件版本、配置路径与运行信息都是只读的，见左侧「插件信息」。</li>
                   </ul>
                 </div>
               </span>
@@ -508,16 +511,36 @@
               保存设置
             </button>
           </div>
+        </section>
+
+        <!-- ---------------------------------------------------------- 插件信息 -->
+        <section id="section-about" class="section hidden">
+          <header class="section-head">
+            <div class="section-title">
+              <h1>插件信息</h1>
+              <span class="section-help">
+                <button class="help-icon" type="button" aria-label="详细说明" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>本页全部<b>只读</b>：插件信息来自插件自带的 metadata.yaml，其余来自 AstrBot 与插件配置文件。</li>
+                    <li>「运行信息」随每次刷新更新，不需要保存；排查问题时可连同版本号一起反馈。</li>
+                  </ul>
+                </div>
+              </span>
+            </div>
+            <p class="section-lead">运行环境与配置路径，以及插件版本、作者与仓库；全部只读。</p>
+          </header>
 
           <div class="panel">
             <h2>运行信息
-              <span class="section-help pop-anchor-right pop-above">
+              <span class="section-help pop-anchor-right">
                 <button class="help-icon" type="button" aria-label="关于运行信息" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
                 <div class="help-pop" role="note">
                   <ul class="hint-list">
                     <li>「自主发言总开关」在 AstrBot 插件配置里（<code>enabled</code>）：关闭后只停调度，本页面与规则数据都保留。</li>
                     <li>「文件异常」显示配置读取失败的原因，正常时显示「无」。</li>
                     <li>「数据结构版本」是 settings.json 的格式版本；旧数据按缺省值兼容读取，下次保存时写回当前版本。</li>
+                    <li>「运行环境」是当前实际运行 AstrBot 与 Python 的版本，反馈问题时请一并附上。</li>
                   </ul>
                 </div>
               </span>
@@ -535,8 +558,45 @@
               <dd id="info-schema">-</dd>
               <dt>文件异常</dt>
               <dd id="info-error">-</dd>
+              <dt>运行环境</dt>
+              <dd id="info-environment">-</dd>
             </dl>
-            <p class="hint">配置路径、开关状态与数据结构版本，只读。</p>
+            <p class="hint">配置路径、开关状态、数据结构版本与运行环境，只读。</p>
+          </div>
+
+          <div class="panel">
+            <h2>插件信息
+              <span class="section-help pop-anchor-right pop-above">
+                <button class="help-icon" type="button" aria-label="关于插件信息" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8" cy="4.7" r=".95" fill="currentColor"/><path d="M8 7.1v5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <div class="help-pop" role="note">
+                  <ul class="hint-list">
+                    <li>这些字段直接取自插件目录下的 <code>metadata.yaml</code>，发版后随之更新，不需要在这里修改。</li>
+                    <li>「要求 AstrBot 版本」是插件声明的兼容范围；实际运行的版本见上方「运行信息」。</li>
+                  </ul>
+                </div>
+              </span>
+            </h2>
+            <dl class="kv kv-text">
+              <dt>插件名称</dt>
+              <dd id="info-plugin-name">-</dd>
+              <dt>显示名称</dt>
+              <dd id="info-plugin-display">-</dd>
+              <dt>版本</dt>
+              <dd id="info-plugin-version">-</dd>
+              <dt>作者</dt>
+              <dd id="info-plugin-author">-</dd>
+              <dt>简介</dt>
+              <dd id="info-plugin-desc">-</dd>
+              <dt>仓库</dt>
+              <dd><a id="info-plugin-repo" target="_blank" rel="noopener noreferrer">-</a></dd>
+              <dt>支持平台</dt>
+              <dd id="info-plugin-platforms">-</dd>
+              <dt>标签</dt>
+              <dd id="info-plugin-tags">-</dd>
+              <dt>要求 AstrBot 版本</dt>
+              <dd id="info-plugin-astrbot">-</dd>
+            </dl>
+            <p class="hint">插件名称、版本与作者来自 metadata.yaml，只读。</p>
           </div>
         </section>
       </main>

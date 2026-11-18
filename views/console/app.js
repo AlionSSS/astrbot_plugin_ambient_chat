@@ -8,6 +8,8 @@
  */
 import { ready } from './js/api.js';
 import { maybeShowAstrbotConfigAdvice } from './js/first-run.js';
+// 插件信息页没有按钮，导入即完成 `overview` / `section` 订阅。
+import './js/sections/about.js';
 import { renderBindings } from './js/sections/bindings.js';
 import {
   actions as bindingModalActions,
